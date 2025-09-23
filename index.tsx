@@ -109,8 +109,7 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      // Step 1: Pre-computation for ETR
-      setProgressMessage("1/4: Analyzing workload...");
+      setProgressMessage("1/5: Analyzing workload...");
       const pageCounts = await Promise.all(
         files.map(async (file) => {
           const typedarray = new Uint8Array(await file.arrayBuffer());
@@ -119,12 +118,10 @@ const App: React.FC = () => {
         })
       );
       const totalExtractionChunks = pageCounts.reduce((acc, count) => acc + Math.ceil(count / PDF_PAGE_CHUNK_SIZE), 0);
-      // Rough guess for total chunks before we know the row count
-      totalChunksRef.current = totalExtractionChunks * 2 + 1; // Extraction + Rough guess for standardization + 1 for schema design
+      totalChunksRef.current = totalExtractionChunks * 2; // Rough guess for extraction + standardization
       startTimeRef.current = Date.now();
 
-      // Step 2: Extract tables from all PDFs in parallel
-      setProgressMessage(`2/4: Extracting data from ${files.length} PDFs...`);
+      setProgressMessage(`2/5: Extracting data from ${files.length} PDFs...`);
       const extractionPromises = files.map(file => extractTablesFromPdf(file, ai, updateEtr));
       const extractionResults = await Promise.all(extractionPromises);
       let allExtractedRows: any[] = extractionResults.flat();
@@ -135,23 +132,29 @@ const App: React.FC = () => {
         return;
       }
       
-      // Refine ETR estimate with actual row count and schema design step
       const actualStandardizationChunks = Math.ceil(allExtractedRows.length / DATA_CHUNK_SIZE);
-      totalChunksRef.current = totalExtractionChunks + actualStandardizationChunks; // Extraction + Standardization
+      totalChunksRef.current = totalExtractionChunks + actualStandardizationChunks;
 
-      // Step 3: Standardize and aggregate voyage data
-      setProgressMessage(`3/4: Summarizing ${allExtractedRows.length} total extracted rows...`);
-      const finalData = await standardizeAndMerge(allExtractedRows, ai, (msg) => setProgressMessage(`3/4: ${msg}`), updateEtr);
-
-      if(finalData.length === 0) {
-        setErrorMessage("Could not standardize the extracted table data. The model may have failed to group and summarize the voyage logs.");
+      setProgressMessage(`3/5: Standardizing ${allExtractedRows.length} rows...`);
+      const standardizedData = await standardizeAllRows(allExtractedRows, ai, updateEtr);
+      
+      if (standardizedData.length === 0) {
+          setErrorMessage("Could not standardize the extracted table data. The model may have failed to understand the data structure.");
+          setStatus("error");
+          return;
+      }
+      
+      setProgressMessage("4/5: Aggregating voyage logs...");
+      const finalData = aggregateVoyages(standardizedData);
+      
+       if(finalData.length === 0) {
+        setErrorMessage("Could not group the standardized data into voyages. Check if voyage numbers are present in the PDFs.");
         setStatus("error");
         return;
       }
 
-      // Step 4: Create Excel file
-      setProgressMessage("4/4: Generating Excel file...");
-      setEtr(""); // Hide ETR for the final step
+      setProgressMessage("5/5: Generating Excel file...");
+      setEtr("");
       
       const desiredHeadersInOrder = [
         "NO",
@@ -247,7 +250,7 @@ Jika tidak ada tabel yang ditemukan, kembalikan array JSON kosong.`;
                         return Array.isArray(tables) ? tables : [];
                     } catch (e) {
                         console.warn(`Could not process or parse pages ${pageChunk.join(', ')} of ${file.name}`, e);
-                        return []; // Return empty array on failure
+                        return [];
                     } finally {
                         onChunkComplete();
                     }
@@ -266,79 +269,57 @@ Jika tidak ada tabel yang ditemukan, kembalikan array JSON kosong.`;
     });
   };
   
-  const standardizeAndMerge = async (allRows: any[], ai: GoogleGenAI, updateProgress: (msg: string) => void, onChunkComplete: () => void): Promise<any[]> => {
-      if (allRows.length === 0) return [];
-      
-      const masterSchemaProperties = {
-        "TANGGAL": { "type": Type.STRING, "description": "Date of the voyage (e.g., '2024-12-26')." },
-        "NOMOR_VOYAGE": { "type": Type.STRING, "description": "The voyage number or identifier." },
-        "PELABUHAN_MUAT": { "type": Type.STRING, "description": "The port of loading." },
-        "PELABUHAN_BONGKAR": { "type": Type.STRING, "description": "The port of discharge." },
-        "LAMA_PELAYARAN": { "type": Type.STRING, "description": "The duration of the voyage (e.g., '5 Hari' or '12 Jam')." },
-        "JUMLAH_PENUMPANG": { "type": Type.INTEGER, "description": "The total count of passengers for the voyage." }
-      };
-      
-      const standardizedHeaders = Object.keys(masterSchemaProperties);
+const standardizeAllRows = async (allRows: any[], ai: GoogleGenAI, onChunkComplete: () => void): Promise<any[]> => {
+    if (allRows.length === 0) return [];
 
-      // Process all data in parallel chunks
-      const chunks = [];
-      for (let i = 0; i < allRows.length; i += DATA_CHUNK_SIZE) {
+    const chunks = [];
+    for (let i = 0; i < allRows.length; i += DATA_CHUNK_SIZE) {
         chunks.push(allRows.slice(i, i + DATA_CHUNK_SIZE));
-      }
-      
-      updateProgress(`Aggregating ${allRows.length} rows into voyage summaries...`);
-      
-      const config = {
+    }
+
+    const masterSchema = {
+        "TANGGAL": { type: Type.STRING },
+        "NOMOR_VOYAGE": { type: Type.STRING },
+        "PELABUHAN_MUAT": { type: Type.STRING },
+        "PELABUHAN_BONGKAR": { type: Type.STRING },
+        "LAMA_PELAYARAN": { type: Type.STRING },
+    };
+
+    const config = {
         responseMimeType: "application/json",
         responseSchema: {
             type: Type.ARRAY,
             items: {
                 type: Type.OBJECT,
-                properties: {
-                  "TANGGAL": { "type": Type.STRING },
-                  "NOMOR_VOYAGE": { "type": Type.STRING },
-                  "PELABUHAN_MUAT": { "type": Type.STRING },
-                  "PELABUHAN_BONGKAR": { "type": Type.STRING },
-                  "LAMA_PELAYARAN": { "type": Type.STRING },
-                  "JUMLAH_PENUMPANG": { "type": Type.INTEGER }
-                },
-                required: standardizedHeaders,
+                properties: masterSchema,
             }
         },
         thinkingConfig: { thinkingBudget: 0 }
-      };
+    };
 
-      const transformationPromises = chunks.map(chunk => {
-        const transformPrompt = `
-Anda adalah mesin agregasi dan transformasi data. Tugas Anda adalah memproses data mentah yang diekstrak dari PDF log pelayaran dan merangkumnya menjadi satu catatan per pelayaran.
+    const standardizationPromises = chunks.map(chunk => {
+        const prompt = `
+Anda adalah asisten pemetaan data. Tugas Anda adalah mengubah setiap objek JSON dalam array input agar sesuai dengan skema target.
+PENTING: JANGAN MENGAGREGASI, MENGHITUNG, ATAU MERINGKAS DATA. Ubah setiap objek satu per satu. Jumlah objek dalam output harus sama dengan jumlah objek dalam input.
 
-**Skema Utama (output akhir Anda untuk SETIAP pelayaran unik):**
-${JSON.stringify(standardizedHeaders)}
+Skema Target (Kunci yang harus ada di setiap objek output):
+${JSON.stringify(Object.keys(masterSchema))}
 
-**INSTRUKSI PENTING:**
-1.  Potongan data mentah di bawah ini berisi baris-baris yang mungkin merupakan penumpang perorangan atau bagian dari log pelayaran.
-2.  Tujuan utama Anda adalah **mengelompokkan semua baris berdasarkan pengenal pelayaran yang unik** (seperti 'nomor voyage', 'voyage no', 'no. pelayaran', dll.).
-3.  Untuk setiap pelayaran unik, Anda harus membuat **satu objek JSON ringkasan tunggal**.
-4.  **Hitung 'JUMLAH_PENUMPANG'**: Hitung jumlah penumpang unik atau baris yang terkait dengan setiap pelayaran untuk mendapatkan jumlah total penumpang. Jika setiap baris adalah satu penumpang, cukup hitung baris untuk pelayaran tersebut.
-5.  **Ekstrak Detail Pelayaran**: Dari baris-baris untuk pelayaran tertentu, ekstrak 'TANGGAL', 'NOMOR_VOYAGE', 'PELABUHAN_MUAT', 'PELABUHAN_BONGKAR', dan 'LAMA_PELAYARAN'. Nilai-nilai ini harus konsisten untuk satu pelayaran.
-6.  Petakan data yang diekstrak dan dihitung ke Skema Utama. Pastikan setiap objek dalam array respons Anda berisi semua kunci dari skema.
-7.  Jika sebuah nilai tidak dapat ditemukan atau dihitung, gunakan nilai default yang wajar seperti 'N/A' untuk string atau 0 untuk angka.
-8.  Output Anda HARUS HANYA berupa array JSON dari objek-objek ringkasan ini. Jangan sertakan teks lain.
+Instruksi:
+1.  Untuk setiap objek dalam data mentah, buat objek baru yang mengikuti Skema Target.
+2.  Petakan nilai dari data mentah ke kunci yang sesuai di Skema Target. Nama kunci mungkin berbeda (misalnya, 'No. Pelayaran', 'voyage no' harus dipetakan ke 'NOMOR_VOYAGE'). Gunakan logika Anda untuk menemukan pemetaan terbaik.
+3.  Jika suatu nilai untuk kunci Skema Target tidak dapat ditemukan di objek mentah, gunakan nilai 'null'.
+4.  Pastikan output Anda HANYA berupa array JSON dari objek-objek yang telah diubah.
 
-**Potongan Data Mentah untuk Diproses:**
+Data Mentah untuk Diproses:
 ${JSON.stringify(chunk)}
 `;
-
-        const promise = ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: transformPrompt,
-            config
-        });
+        const promise = ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt, config });
         promise.finally(() => onChunkComplete());
         return promise;
     });
 
-    const settledResults = await Promise.allSettled(transformationPromises);
+    const settledResults = await Promise.allSettled(standardizationPromises);
     
     let finalStandardizedData: any[] = [];
     settledResults.forEach(result => {
@@ -349,15 +330,50 @@ ${JSON.stringify(chunk)}
                     finalStandardizedData.push(...standardizedChunk);
                 }
             } catch (e) {
-                console.warn("Failed to parse a transformed chunk:", e);
+                console.warn("Failed to parse a standardized chunk:", e);
             }
         } else {
-            console.error("A transformation chunk failed:", result.reason);
+            console.error("A standardization chunk failed:", result.reason);
         }
     });
 
     return finalStandardizedData;
-  };
+};
+
+const aggregateVoyages = (standardizedRows: any[]): any[] => {
+    if (!standardizedRows || standardizedRows.length === 0) {
+        return [];
+    }
+
+    const voyageMap = new Map<string, any>();
+
+    for (const row of standardizedRows) {
+        const voyageId = row.NOMOR_VOYAGE;
+        if (!voyageId || voyageId === 'N/A' || voyageId === null) continue;
+
+        if (!voyageMap.has(voyageId)) {
+            voyageMap.set(voyageId, {
+                TANGGAL: row.TANGGAL || 'N/A',
+                NOMOR_VOYAGE: voyageId,
+                PELABUHAN_MUAT: row.PELABUHAN_MUAT || 'N/A',
+                PELABUHAN_BONGKAR: row.PELABUHAN_BONGKAR || 'N/A',
+                LAMA_PELAYARAN: row.LAMA_PELAYARAN || 'N/A',
+                JUMLAH_PENUMPANG: 0,
+            });
+        }
+
+        const voyageData = voyageMap.get(voyageId);
+        voyageData.JUMLAH_PENUMPANG += 1;
+
+        // Logic to fill in missing data from subsequent rows of the same voyage
+        if ((voyageData.TANGGAL === 'N/A' || voyageData.TANGGAL === null) && row.TANGGAL) voyageData.TANGGAL = row.TANGGAL;
+        if ((voyageData.PELABUHAN_MUAT === 'N/A' || voyageData.PELABUHAN_MUAT === null) && row.PELABUHAN_MUAT) voyageData.PELABUHAN_MUAT = row.PELABUHAN_MUAT;
+        if ((voyageData.PELABUHAN_BONGKAR === 'N/A' || voyageData.PELABUHAN_BONGKAR === null) && row.PELABUHAN_BONGKAR) voyageData.PELABUHAN_BONGKAR = row.PELABUHAN_BONGKAR;
+        if ((voyageData.LAMA_PELAYARAN === 'N/A' || voyageData.LAMA_PELAYARAN === null) && row.LAMA_PELAYARAN) voyageData.LAMA_PELAYARAN = row.LAMA_PELAYARAN;
+    }
+
+    return Array.from(voyageMap.values());
+};
 
 
   const renderContent = () => {
