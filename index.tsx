@@ -83,6 +83,55 @@ const App: React.FC = () => {
     setEtr(formatTime(remainingTime));
   }, []);
 
+  const aggregateData = (rows: any[]): any[] => {
+      const aggregationMap = new Map<string, any[]>();
+
+      for (const row of rows) {
+          // If the row is already a summary row with a passenger count, treat it as its own unique group.
+          const passengerCount = parseInt(String(row.JUMLAH_PENUMPANG), 10);
+          if (!isNaN(passengerCount) && passengerCount > 0) {
+               // Create a unique key to prevent merging with other rows.
+               const key = `summary-${row.NOMOR_VOYAGE || ''}-${row.TANGGAL || ''}-${row.PELABUHAN_MUAT || ''}-${row.PELABUHAN_BONGKAR || ''}-${Math.random()}`;
+               aggregationMap.set(key, [row]); // Store as a group of one
+               continue;
+          }
+
+          // Otherwise, group individual passenger rows by voyage segment to count them.
+          const key = [
+              row.NOMOR_VOYAGE || 'N/A',
+              row.TANGGAL || 'N/A',
+              row.PELABUHAN_MUAT || 'N/A',
+              row.PELABUHAN_BONGKAR || 'N/A',
+          ].join('||');
+          
+          if (!aggregationMap.has(key)) {
+              aggregationMap.set(key, []);
+          }
+          aggregationMap.get(key)!.push(row);
+      }
+
+      const aggregatedResults: any[] = [];
+      for (const group of aggregationMap.values()) {
+          if (group.length === 0) continue;
+          const firstRow = group[0];
+          
+          const passengerCount = parseInt(String(firstRow.JUMLAH_PENUMPANG), 10);
+          // If the first row in the group was a summary row, use its count. Otherwise, count the items in the group.
+          const isPreAggregated = group.length === 1 && !isNaN(passengerCount) && passengerCount > 0;
+
+          aggregatedResults.push({
+              TANGGAL: firstRow.TANGGAL,
+              NOMOR_VOYAGE: firstRow.NOMOR_VOYAGE,
+              PELABUHAN_MUAT: firstRow.PELABUHAN_MUAT,
+              PELABUHAN_BONGKAR: firstRow.PELABUHAN_BONGKAR,
+              LAMA_PELAYARAN: firstRow.LAMA_PELAYARAN,
+              JUMLAH_PENUMPANG: isPreAggregated ? passengerCount : group.length,
+          });
+      }
+
+      return aggregatedResults;
+  };
+
 
   const processFiles = useCallback(async () => {
     if (!apiKey) {
@@ -143,15 +192,9 @@ const App: React.FC = () => {
           setStatus("error");
           return;
       }
-      
-      setProgressMessage("4/5: Aggregating voyage logs...");
-      const finalData = aggregateVoyages(standardizedData);
-      
-       if(finalData.length === 0) {
-        setErrorMessage("Could not group the standardized data into voyages. Check if voyage numbers are present in the PDFs.");
-        setStatus("error");
-        return;
-      }
+
+      setProgressMessage(`4/5: Aggregating voyage logs...`);
+      const finalData = aggregateData(standardizedData);
 
       setProgressMessage("5/5: Generating Excel file...");
       setEtr("");
@@ -165,15 +208,15 @@ const App: React.FC = () => {
         "LAMA PELAYARAN",
         "JUMLAH PENUMPANG"
       ];
-
+      
       const dataForSheet = finalData.map((row, index) => ({
         "NO": index + 1,
-        "TANGGAL": row.TANGGAL,
-        "NOMOR VOYAGE": row.NOMOR_VOYAGE,
-        "PELABUHAN MUAT": row.PELABUHAN_MUAT,
-        "PELABUHAN BONGKAR": row.PELABUHAN_BONGKAR,
-        "LAMA PELAYARAN": row.LAMA_PELAYARAN,
-        "JUMLAH PENUMPANG": row.JUMLAH_PENUMPANG,
+        "TANGGAL": row.TANGGAL || 'N/A',
+        "NOMOR VOYAGE": row.NOMOR_VOYAGE || 'N/A',
+        "PELABUHAN MUAT": row.PELABUHAN_MUAT || 'N/A',
+        "PELABUHAN BONGKAR": row.PELABUHAN_BONGKAR || 'N/A',
+        "LAMA PELAYARAN": row.LAMA_PELAYARAN || 'N/A',
+        "JUMLAH PENUMPANG": parseInt(String(row.JUMLAH_PENUMPANG), 10) || 0,
       }));
 
       const workbook = XLSX.utils.book_new();
@@ -228,17 +271,15 @@ const App: React.FC = () => {
                             return { inlineData: { data: dataUrl.split(",")[1], mimeType: "image/jpeg" } };
                         }));
                         
-                        const prompt = `Analisis halaman-halaman PDF ini dan ekstrak semua data tabel ke dalam satu array JSON tunggal yang berisi objek-objek. Setiap objek mewakili satu baris.
+                        const prompt = `Analisis gambar-gambar halaman PDF ini dan ekstrak semua data tabular ke dalam satu array JSON. Setiap objek dalam array harus mewakili satu baris dari tabel.
 
-Instruksi Utama:
-1.  Identifikasi semua header kolom yang berbeda di setiap tabel yang ditemukan.
-2.  Untuk setiap baris data, buat sebuah objek JSON.
-3.  Setiap objek JSON harus memiliki kunci untuk setiap header kolom yang diidentifikasi.
-4.  Jika sebuah sel kosong untuk suatu baris, gunakan nilai 'null' untuk kuncinya. Jangan menghilangkan kunci tersebut.
-5.  Jika Anda menemukan daftar penumpang yang terkait dengan suatu pelayaran, ekstrak setiap penumpang sebagai baris terpisah tetapi pastikan informasi pelayaran (seperti nomor voyage, tanggal, pelabuhan) disalin ke setiap baris penumpang.
-6.  Tujuan akhirnya adalah untuk mengagregasi data ini, jadi sangat penting untuk menangkap semua detail dari setiap baris.
-
-Jika tidak ada tabel yang ditemukan, kembalikan array JSON kosong.`;
+Instruksi:
+1.  Identifikasi semua tabel yang ada.
+2.  Ekstrak setiap baris dari setiap tabel.
+3.  Jika sebuah tabel berisi daftar penumpang individu, ekstrak setiap penumpang sebagai baris terpisah dalam array JSON.
+4.  Jika sebuah tabel berisi baris ringkasan (misalnya, satu baris untuk satu perjalanan dengan kolom 'Jumlah Penumpang'), ekstrak baris ringkasan tersebut apa adanya.
+5.  Gunakan header kolom dari PDF sebagai kunci dalam objek JSON.
+6.  Jika tidak ada tabel yang ditemukan, kembalikan array JSON kosong.`;
                         
                         const response = await ai.models.generateContent({
                           model: 'gemini-2.5-flash',
@@ -283,6 +324,8 @@ const standardizeAllRows = async (allRows: any[], ai: GoogleGenAI, onChunkComple
         "PELABUHAN_MUAT": { type: Type.STRING },
         "PELABUHAN_BONGKAR": { type: Type.STRING },
         "LAMA_PELAYARAN": { type: Type.STRING },
+        "NAMA_PENUMPANG": { type: Type.STRING }, // To capture individual passenger names if present
+        "JUMLAH_PENUMPANG": { type: Type.STRING }, // To capture summary counts if present
     };
 
     const config = {
@@ -307,7 +350,13 @@ ${JSON.stringify(Object.keys(masterSchema))}
 
 Instruksi:
 1.  Untuk setiap objek dalam data mentah, buat objek baru yang mengikuti Skema Target.
-2.  Petakan nilai dari data mentah ke kunci yang sesuai di Skema Target. Nama kunci mungkin berbeda (misalnya, 'No. Pelayaran', 'voyage no' harus dipetakan ke 'NOMOR_VOYAGE'). Gunakan logika Anda untuk menemukan pemetaan terbaik.
+2.  Petakan nilai dari data mentah ke kunci yang sesuai di Skema Target. Gunakan logika Anda untuk menemukan pemetaan terbaik.
+    - 'No. Pelayaran', 'voyage no' -> 'NOMOR_VOYAGE'.
+    - 'Port of Loading', 'Asal' -> 'PELABUHAN_MUAT'.
+    - 'Port of Discharge', 'Tujuan' -> 'PELABUHAN_BONGKAR'.
+    - 'Durasi', 'Lama' -> 'LAMA_PELAYARAN'.
+    - 'Nama', 'Passenger Name' -> 'NAMA_PENUMPANG'.
+    - 'Jumlah Orang', 'Penumpang', 'Total Penumpang' -> 'JUMLAH_PENUMPANG'.
 3.  Jika suatu nilai untuk kunci Skema Target tidak dapat ditemukan di objek mentah, gunakan nilai 'null'.
 4.  Pastikan output Anda HANYA berupa array JSON dari objek-objek yang telah diubah.
 
@@ -339,42 +388,6 @@ ${JSON.stringify(chunk)}
 
     return finalStandardizedData;
 };
-
-const aggregateVoyages = (standardizedRows: any[]): any[] => {
-    if (!standardizedRows || standardizedRows.length === 0) {
-        return [];
-    }
-
-    const voyageMap = new Map<string, any>();
-
-    for (const row of standardizedRows) {
-        const voyageId = row.NOMOR_VOYAGE;
-        if (!voyageId || voyageId === 'N/A' || voyageId === null) continue;
-
-        if (!voyageMap.has(voyageId)) {
-            voyageMap.set(voyageId, {
-                TANGGAL: row.TANGGAL || 'N/A',
-                NOMOR_VOYAGE: voyageId,
-                PELABUHAN_MUAT: row.PELABUHAN_MUAT || 'N/A',
-                PELABUHAN_BONGKAR: row.PELABUHAN_BONGKAR || 'N/A',
-                LAMA_PELAYARAN: row.LAMA_PELAYARAN || 'N/A',
-                JUMLAH_PENUMPANG: 0,
-            });
-        }
-
-        const voyageData = voyageMap.get(voyageId);
-        voyageData.JUMLAH_PENUMPANG += 1;
-
-        // Logic to fill in missing data from subsequent rows of the same voyage
-        if ((voyageData.TANGGAL === 'N/A' || voyageData.TANGGAL === null) && row.TANGGAL) voyageData.TANGGAL = row.TANGGAL;
-        if ((voyageData.PELABUHAN_MUAT === 'N/A' || voyageData.PELABUHAN_MUAT === null) && row.PELABUHAN_MUAT) voyageData.PELABUHAN_MUAT = row.PELABUHAN_MUAT;
-        if ((voyageData.PELABUHAN_BONGKAR === 'N/A' || voyageData.PELABUHAN_BONGKAR === null) && row.PELABUHAN_BONGKAR) voyageData.PELABUHAN_BONGKAR = row.PELABUHAN_BONGKAR;
-        if ((voyageData.LAMA_PELAYARAN === 'N/A' || voyageData.LAMA_PELAYARAN === null) && row.LAMA_PELAYARAN) voyageData.LAMA_PELAYARAN = row.LAMA_PELAYARAN;
-    }
-
-    return Array.from(voyageMap.values());
-};
-
 
   const renderContent = () => {
     switch(status) {
