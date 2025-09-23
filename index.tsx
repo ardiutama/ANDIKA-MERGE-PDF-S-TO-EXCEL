@@ -9,6 +9,7 @@ declare var pdfjsLib: any;
 
 const App: React.FC = () => {
   const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState<string>("");
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<string>("idle"); // idle, processing, success, error
   const [progressMessage, setProgressMessage] = useState<string>("");
@@ -17,14 +18,27 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const getApiKey = (): string | null => {
+    return process.env.API_KEY || sessionStorage.getItem('GEMINI_API_KEY');
+  };
+
   useEffect(() => {
     // Check for API Key on initial load
-    if (process.env.API_KEY) {
+    if (getApiKey()) {
       setIsConfigured(true);
     } else {
       setIsConfigured(false);
     }
   }, []);
+
+  const handleApiKeySubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (apiKeyInput.trim()) {
+      sessionStorage.setItem('GEMINI_API_KEY', apiKeyInput.trim());
+      setIsConfigured(true);
+      setApiKeyInput(""); // Clear the input from state after saving
+    }
+  };
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
@@ -59,8 +73,8 @@ const App: React.FC = () => {
       return;
     }
 
-    // The initial check is now handled on app load, but we keep this as a safeguard.
-    if (!process.env.API_KEY) {
+    const apiKey = getApiKey();
+    if (!apiKey) {
       setIsConfigured(false);
       return;
     }
@@ -70,7 +84,7 @@ const App: React.FC = () => {
     setDownloadLink(null);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       
       setProgressMessage(`1/3: Analyzing ${files.length} PDF file(s)...`);
       
@@ -126,6 +140,7 @@ const App: React.FC = () => {
       let detailedErrorMessage = "An unexpected error occurred. Please check the console for details.";
       if (error instanceof Error) {
           if (error.message.includes("API Key")) {
+              sessionStorage.removeItem('GEMINI_API_KEY');
               setIsConfigured(false); // Trigger the config screen if API key fails
               return;
           } else {
@@ -325,61 +340,45 @@ const App: React.FC = () => {
       return (
         <div className="p-8 bg-slate-800/50 rounded-xl shadow-2xl backdrop-blur-sm border border-slate-700 text-left">
           <div className="flex items-center mb-4">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-amber-400 mr-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+             <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-amber-400 mr-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
             <div>
-              <h2 className="text-2xl font-bold text-amber-300">Satu Langkah Terakhir: Konfigurasi Kunci API</h2>
-              <p className="text-slate-400">Untuk melindungi kunci API Anda, aplikasi ini membacanya dari pengaturan rahasia platform.</p>
+              <h2 className="text-2xl font-bold text-amber-300">Konfigurasi Kunci API Diperlukan</h2>
+              <p className="text-slate-400">Silakan masukkan kunci API Google AI Anda untuk melanjutkan.</p>
             </div>
           </div>
 
-          <div className="space-y-4 mt-6">
-            <div className="flex items-start">
-              <div className="flex-shrink-0 w-8 h-8 bg-sky-500/20 text-sky-300 rounded-full flex items-center justify-center font-bold text-lg">1</div>
-              <div className="ml-4">
-                <h3 className="font-bold text-slate-100">Buka Pengaturan Proyek</h3>
-                <p className="text-slate-400">Di platform tempat aplikasi ini berjalan, cari menu "Settings" atau "Pengaturan".</p>
-              </div>
+          <form onSubmit={handleApiKeySubmit} className="mt-6 space-y-4">
+            <div>
+              <label htmlFor="api-key-input" className="block text-sm font-medium text-slate-300 mb-2">
+                Google AI API Key
+              </label>
+              <input
+                id="api-key-input"
+                type="password"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-md text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                placeholder="Masukkan kunci API Anda di sini"
+                required
+              />
             </div>
-            <div className="flex items-start">
-              <div className="flex-shrink-0 w-8 h-8 bg-sky-500/20 text-sky-300 rounded-full flex items-center justify-center font-bold text-lg">2</div>
-              <div className="ml-4">
-                <h3 className="font-bold text-slate-100">Temukan 'Secrets'</h3>
-                <p className="text-slate-400">Cari bagian bernama "Secrets" atau "Environment Variables".</p>
-              </div>
+            
+            <div className="p-3 bg-amber-900/20 text-amber-300 text-xs rounded-md border border-amber-800">
+              <strong>Catatan Keamanan:</strong> Kunci Anda hanya akan disimpan selama sesi browser ini dan akan hilang saat Anda menutup tab.
             </div>
-            <div className="flex items-start">
-              <div className="flex-shrink-0 w-8 h-8 bg-sky-500/20 text-sky-300 rounded-full flex items-center justify-center font-bold text-lg">3</div>
-              <div className="ml-4">
-                <h3 className="font-bold text-slate-100">Buat Secret Baru</h3>
-                <div className="mt-2 p-3 bg-slate-900/50 rounded-md border border-slate-700 text-sm">
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400">Nama / Name:</span>
-                    <code className="px-2 py-1 rounded text-sky-300 bg-slate-700 font-mono">API_KEY</code>
-                  </div>
-                  <hr className="border-slate-700 my-2" />
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400">Value / Nilai:</span>
-                    <span className="text-slate-500 italic">tempelkan kunci API Anda di sini</span>
-                  </div>
-                </div>
-                 <p className="text-xs text-slate-500 mt-2">Nama secret harus <strong className="text-slate-400">API_KEY</strong>, sama persis.</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-8 text-center">
-            <button 
-              onClick={() => window.location.reload()}
-              className="bg-sky-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-sky-700 transition-colors flex items-center justify-center mx-auto"
+            
+            <button
+              type="submit"
+              className="w-full bg-sky-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-sky-700 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:text-slate-400 transition-colors"
             >
-               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0 0 11.667 0l3.181-3.183m-4.991-2.691L15.023 9.348a8.25 8.25 0 0 0-11.667 0L2.985 12.355" />
-              </svg>
-              Saya Sudah Selesai, Segarkan Halaman
+              Simpan dan Lanjutkan
             </button>
-          </div>
+          </form>
+           <p className="text-xs text-slate-500 mt-4 text-center">
+             Untuk keamanan terbaik, disarankan untuk mengkonfigurasi kunci sebagai <code className="bg-slate-700 px-1 rounded">API_KEY</code> environment secret.
+           </p>
         </div>
       )
     }
