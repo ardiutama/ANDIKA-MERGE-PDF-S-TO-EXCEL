@@ -124,27 +124,27 @@ const App: React.FC = () => {
       startTimeRef.current = Date.now();
 
       // Step 2: Extract tables from all PDFs in parallel
-      setProgressMessage(`2/4: Extracting tables from ${files.length} PDFs...`);
+      setProgressMessage(`2/4: Extracting data from ${files.length} PDFs...`);
       const extractionPromises = files.map(file => extractTablesFromPdf(file, ai, updateEtr));
       const extractionResults = await Promise.all(extractionPromises);
       let allExtractedRows: any[] = extractionResults.flat();
 
       if (allExtractedRows.length === 0) {
-        setErrorMessage("No tables could be extracted from the provided PDFs.");
+        setErrorMessage("No data could be extracted from the provided PDFs.");
         setStatus("error");
         return;
       }
       
       // Refine ETR estimate with actual row count and schema design step
       const actualStandardizationChunks = Math.ceil(allExtractedRows.length / DATA_CHUNK_SIZE);
-      totalChunksRef.current = totalExtractionChunks + 1 + actualStandardizationChunks; // Extraction + 1 for schema design + Standardization
+      totalChunksRef.current = totalExtractionChunks + actualStandardizationChunks; // Extraction + Standardization
 
-      // Step 3: Design Schema, then Standardize and merge tables in parallel
-      setProgressMessage(`3/4: Standardizing ${allExtractedRows.length} total rows...`);
+      // Step 3: Standardize and aggregate voyage data
+      setProgressMessage(`3/4: Summarizing ${allExtractedRows.length} total extracted rows...`);
       const finalData = await standardizeAndMerge(allExtractedRows, ai, (msg) => setProgressMessage(`3/4: ${msg}`), updateEtr);
 
       if(finalData.length === 0) {
-        setErrorMessage("Could not standardize the extracted table data.");
+        setErrorMessage("Could not standardize the extracted voyage data.");
         setStatus("error");
         return;
       }
@@ -155,39 +155,27 @@ const App: React.FC = () => {
       
       const desiredHeadersInOrder = [
         "NO",
-        "HARI, TANGGAL",
-        "JAM",
-        "NAMA KAPAL / NAMA PANGGILAN",
-        "GROSS TONNAGE",
-        "Pelabuhan Asal",
-        "Pelabuhan Tujuan",
-        "BOARDING PASS",
-        "NAMA PENUMPANG",
-        "JENIS KELAMIN",
-        "USIA",
-        "STATUS USIA",
-        "ALAMAT"
+        "TANGGAL",
+        "NOMOR VOYAGE",
+        "PELABUHAN MUAT",
+        "PELABUHAN BONGKAR",
+        "LAMA PELAYARAN",
+        "JUMLAH PENUMPANG"
       ];
 
       const dataForSheet = finalData.map((row, index) => ({
         "NO": index + 1,
-        "HARI, TANGGAL": row.HARI_TANGGAL,
-        "JAM": row.JAM,
-        "NAMA KAPAL / NAMA PANGGILAN": row.NAMA_KAPAL_PANGGILAN,
-        "GROSS TONNAGE": row.GROSS_TONNAGE,
-        "Pelabuhan Asal": row.PELABUHAN_ASAL,
-        "Pelabuhan Tujuan": row.PELABUHAN_TUJUAN,
-        "BOARDING PASS": row.BOARDING_PASS,
-        "NAMA PENUMPANG": row.NAMA_PENUMPANG,
-        "JENIS KELAMIN": row.JENIS_KELAMIN,
-        "USIA": row.USIA,
-        "STATUS USIA": row.STATUS_USIA,
-        "ALAMAT": row.ALAMAT,
+        "TANGGAL": row.TANGGAL,
+        "NOMOR VOYAGE": row.NOMOR_VOYAGE,
+        "PELABUHAN MUAT": row.PELABUHAN_MUAT,
+        "PELABUHAN BONGKAR": row.PELABUHAN_BONGKAR,
+        "LAMA PELAYARAN": row.LAMA_PELAYARAN,
+        "JUMLAH PENUMPANG": row.JUMLAH_PENUMPANG,
       }));
 
       const workbook = XLSX.utils.book_new();
       const worksheet = XLSX.utils.json_to_sheet(dataForSheet, { header: desiredHeadersInOrder });
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Compiled Data");
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Compiled Voyage Logs");
       
       const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
       const blob = new Blob([wbout], { type: 'application/octet-stream' });
@@ -227,27 +215,26 @@ const App: React.FC = () => {
                     try {
                         const imageParts = await Promise.all(pageChunk.map(async (pageNum) => {
                             const page = await pdf.getPage(pageNum);
-                            const viewport = page.getViewport({ scale: 1.0 }); // Reduced scale for performance
+                            const viewport = page.getViewport({ scale: 1.0 });
                             const canvas = document.createElement("canvas");
                             const context = canvas.getContext("2d");
                             canvas.height = viewport.height;
                             canvas.width = viewport.width;
                             await page.render({ canvasContext: context!, viewport: viewport }).promise;
-                            const dataUrl = canvas.toDataURL("image/jpeg", 0.8); // Added compression
+                            const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
                             return { inlineData: { data: dataUrl.split(",")[1], mimeType: "image/jpeg" } };
                         }));
                         
-                        const prompt = `Analyze these PDF pages and extract all tables into a single JSON array of objects. Each object represents a row.
+                        const prompt = `Analyze these PDF pages and extract all tabular data into a single JSON array of objects. Each object represents a row.
 
-Follow these critical steps:
-1.  **Identify ALL column headers** across the entire width of the table, even if the columns below the headers are completely empty.
-2.  For each row of data, create a JSON object.
-3.  **Crucially, every JSON object MUST include a key for EVERY column header you identified in step 1.**
-4.  If a cell is empty for a particular row, include the corresponding key in the JSON object with a 'null' value. Do not omit the key.
+Key Instructions:
+1.  Identify all distinct column headers in any tables found.
+2.  For each data row, create a JSON object.
+3.  Every JSON object must have a key for every column header identified.
+4.  If a cell is empty for a row, use a 'null' value for its key. Do not omit the key.
+5.  If you find lists of passengers associated with a voyage, extract each passenger as a separate row but ensure voyage information (like voyage number, dates, ports) is copied to each passenger row.
 
-Also handle this special case: Some tables list multiple people under one household. This looks like a complete row followed by several rows with only a name. For these 'name-only' rows, create a full record by copying all data (like household ID, address, etc.) from the last complete row, and just replace the name. Every person should have a complete record.
-
-If no tables are found, return an empty array.`;
+If no tables are found, return an empty JSON array.`;
                         
                         const response = await ai.models.generateContent({
                           model: 'gemini-2.5-flash',
@@ -266,13 +253,7 @@ If no tables are found, return an empty array.`;
                 });
                 
                 const results = await Promise.all(chunkProcessingPromises);
-                const extractedRows = results.flat();
-                // Add filename to each row for traceability
-                const rowsWithFilename = extractedRows.map(row => ({
-                    ...row,
-                    NAMA_FILE_PDF: file.name
-                }));
-                resolve(rowsWithFilename);
+                resolve(results.flat());
 
             } catch (err) {
                 console.error(`Error processing PDF ${file.name}:`, err);
@@ -287,34 +268,24 @@ If no tables are found, return an empty array.`;
   const standardizeAndMerge = async (allRows: any[], ai: GoogleGenAI, updateProgress: (msg: string) => void, onChunkComplete: () => void): Promise<any[]> => {
       if (allRows.length === 0) return [];
       
-      // Step 1: Use a fixed, predefined schema based on the desired passenger manifest format.
-      updateProgress("Applying standardized manifest schema...");
       const masterSchemaProperties = {
-        "HARI_TANGGAL": { "type": "STRING", "description": "Combined Day and Date of travel (e.g., 'Thursday, December 26, 2024'). Expected column header: 'HARI, TANGGAL'." },
-        "JAM": { "type": "STRING", "description": "Time of departure (e.g., '18:30'). Expected column header: 'JAM'." },
-        "NAMA_KAPAL_PANGGILAN": { "type": "STRING", "description": "Ship Name / Call Name (e.g., 'KM. SULTAN HASANUDDIN / YCCB2'). Expected column header: 'NAMA KAPAL / NAMA PANGGILAN'." },
-        "GROSS_TONNAGE": { "type": "STRING", "description": "Gross Tonnage (e.g., '1000GT'). Expected column header: 'GROSS TONNAGE'." },
-        "PELABUHAN_ASAL": { "type": "STRING", "description": "Port of Origin. Expected column header: 'Pelabuhan Asal'." },
-        "PELABUHAN_TUJUAN": { "type": "STRING", "description": "Port of Destination. Expected column header: 'Pelabuhan Tujuan'." },
-        "BOARDING_PASS": { "type": "STRING", "description": "Boarding Pass number. Expected column header: 'BOARDING PASS'." },
-        "NAMA_PENUMPANG": { "type": "STRING", "description": "Passenger's full name. Expected column header: 'NAMA PENUMPANG'." },
-        "JENIS_KELAMIN": { "type": "STRING", "description": "Gender ('Laki-Laki' or 'Perempuan'). Expected column header: 'JENIS KELAMIN'." },
-        "USIA": { "type": "STRING", "description": "Age, including units (e.g., '28 Tahun'). Expected column header: 'USIA'." },
-        "STATUS_USIA": { "type": "STRING", "description": "Age status ('DEWASA' or 'ANAK'). Expected column header: 'STATUS USIA'." },
-        "ALAMAT": { "type": "STRING", "description": "Passenger's address. Expected column header: 'ALAMAT'." },
+        "TANGGAL": { "type": Type.STRING, "description": "Date of the voyage (e.g., '2024-12-26')." },
+        "NOMOR_VOYAGE": { "type": Type.STRING, "description": "The voyage number or identifier." },
+        "PELABUHAN_MUAT": { "type": Type.STRING, "description": "The port of loading." },
+        "PELABUHAN_BONGKAR": { "type": Type.STRING, "description": "The port of discharge." },
+        "LAMA_PELAYARAN": { "type": Type.STRING, "description": "The duration of the voyage (e.g., '5 Hari' or '12 Jam')." },
+        "JUMLAH_PENUMPANG": { "type": Type.INTEGER, "description": "The total count of passengers for the voyage." }
       };
       
-      onChunkComplete(); // Count this step as one completed chunk for ETR, replacing the dynamic schema design step.
-
       const standardizedHeaders = Object.keys(masterSchemaProperties);
 
-      // Step 2. Process all data in parallel chunks based on the master schema
+      // Process all data in parallel chunks
       const chunks = [];
       for (let i = 0; i < allRows.length; i += DATA_CHUNK_SIZE) {
         chunks.push(allRows.slice(i, i + DATA_CHUNK_SIZE));
       }
       
-      updateProgress(`Standardizing ${allRows.length} rows into the new schema...`);
+      updateProgress(`Aggregating ${allRows.length} rows into voyage summaries...`);
       
       const config = {
         responseMimeType: "application/json",
@@ -322,8 +293,15 @@ If no tables are found, return an empty array.`;
             type: Type.ARRAY,
             items: {
                 type: Type.OBJECT,
-                properties: masterSchemaProperties,
-                required: standardizedHeaders, // Ensure all keys are present
+                properties: {
+                  "TANGGAL": { "type": Type.STRING },
+                  "NOMOR_VOYAGE": { "type": Type.STRING },
+                  "PELABUHAN_MUAT": { "type": Type.STRING },
+                  "PELABUHAN_BONGKAR": { "type": Type.STRING },
+                  "LAMA_PELAYARAN": { "type": Type.STRING },
+                  "JUMLAH_PENUMPANG": { "type": Type.INTEGER }
+                },
+                required: standardizedHeaders,
             }
         },
         thinkingConfig: { thinkingBudget: 0 }
@@ -331,23 +309,22 @@ If no tables are found, return an empty array.`;
 
       const transformationPromises = chunks.map(chunk => {
         const transformPrompt = `
-You are a data transformation engine. Your task is to convert raw passenger manifest data into a clean, structured format based on a provided master schema.
+You are a data aggregation and transformation engine. Your task is to process raw data extracted from voyage log PDFs and summarize it into one record per voyage.
 
-**Master Schema (your output MUST follow this):**
+**Master Schema (your final output for EACH unique voyage):**
 ${JSON.stringify(standardizedHeaders)}
 
-**Data Source Note:**
-The raw data comes from tables that might be spread across multiple pages. This means some columns that are constant for a whole manifest (like 'NAMA_KAPAL_PANGGILAN', 'JAM', 'HARI_TANGGAL', 'PELABUHAN_ASAL', 'PELABUHAN_TUJUAN', etc.) might only appear once at the top of a page, or not at all on subsequent pages for the same manifest.
-
 **CRITICAL INSTRUCTIONS:**
-1.  For each object in the raw data chunk below (which represents a row), create a new JSON object that strictly adheres to the Master Schema.
-2.  **Intelligently map** fields from the raw data to the corresponding fields in the Master Schema. For example, a raw column named 'Nama Penumpang' or 'NAMA_PENUMPANG' should map to the 'NAMA_PENUMPANG' key in the schema.
-3.  **Fill in missing values:** If a row is missing a value for a constant column (like ship name or date), you MUST infer it from other rows in the chunk that do have that value. All passengers in the same manifest should share the same ship name, date, time, origin, and destination.
-4.  Ensure EVERY object in your response array contains ALL keys from the Master Schema.
-5.  If a value for a key that is unique to a passenger (like 'NAMA_PENUMPANG' or 'ALAMAT') is truly missing and cannot be inferred, use 'null'.
-6.  Your output must ONLY be the final, transformed JSON array for this chunk. Do not include any other text or explanations.
+1.  The raw data chunk below contains rows that might represent individual passengers or parts of a voyage log.
+2.  Your primary goal is to **group all rows by a unique voyage identifier** (like 'nomor voyage', 'voyage no', etc.).
+3.  For each unique voyage, you must create **a single summary JSON object**.
+4.  **Calculate the 'JUMLAH_PENUMPANG'**: Count the number of unique passengers or rows associated with each voyage to get the total passenger count.
+5.  **Extract Voyage Details**: From the rows for a given voyage, extract the 'TANGGAL', 'NOMOR_VOYAGE', 'PELABUHAN_MUAT', 'PELABUHAN_BONGKAR', and 'LAMA_PELAYARAN'. These values should be consistent for a single voyage.
+6.  Map the extracted and calculated data to the Master Schema. Ensure every object in your response array contains all keys from the schema.
+7.  If a value cannot be found or calculated, use a reasonable default like 'N/A' for strings or 0 for numbers.
+8.  Your output must ONLY be a JSON array of these summary objects. Do not include any other text.
 
-**Raw Data Chunk to Transform:**
+**Raw Data Chunk to Process:**
 ${JSON.stringify(chunk)}
 `;
 
@@ -399,7 +376,7 @@ ${JSON.stringify(chunk)}
             <p className="mb-6 text-slate-300">Your compiled Excel file is ready for download.</p>
             <a
               href={downloadLink!}
-              download="compiled_data.xlsx"
+              download="compiled_voyage_logs.xlsx"
               className="inline-block bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105"
             >
               Download Excel File
@@ -480,10 +457,10 @@ ${JSON.stringify(chunk)}
       <div className="w-full max-w-2xl mx-auto">
         <header className="text-center mb-8">
           <h1 className="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-emerald-500">
-            AI PDF Table Extractor
+            AI PDF Voyage Log Extractor
           </h1>
           <p className="mt-2 text-lg text-slate-400">
-            Merge tables from multiple PDFs into a single, clean Excel file.
+            Extract voyage logs from multiple PDFs and merge them into a single Excel file.
           </p>
         </header>
 

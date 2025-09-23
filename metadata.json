@@ -1,5 +1,5 @@
 {
-  "name": "TOOL MERGE PDF TO EXCEL",
-  "description": "An empty app",
+  "name": "TOOL MERGE PDF VOYAGE LOG TO EXCEL",
+  "description": "Extracts and aggregates voyage log data from multiple PDF files into a single, structured Excel file.",
   "requestFramePermissions": []
 }
