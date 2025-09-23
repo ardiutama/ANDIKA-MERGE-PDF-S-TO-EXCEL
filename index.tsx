@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -56,12 +57,15 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
-      setProgressMessage(`1/3: Analyzing ${files.length} files...`);
+      setProgressMessage(`1/3: Analyzing ${files.length} PDF file(s)...`);
       
-      setProgressMessage(`2/3: Extracting summaries from ${files.length} PDFs...`);
-      const extractionPromises = files.map(file => extractSummaryFromPdf(file, ai));
+      const extractionPromises = files.map((file, index) => {
+          setProgressMessage(`2/3: Extracting summary from ${file.name} (${index + 1}/${files.length})...`);
+          return extractSummaryFromPdf(file, ai);
+      });
+
       const summaries = await Promise.all(extractionPromises);
-      const validSummaries = summaries.filter(s => s !== null);
+      const validSummaries = summaries.filter(s => s !== null && s.JUMLAH_PENUMPANG > 0);
 
       if (validSummaries.length === 0) {
         setErrorMessage("Could not extract any voyage summaries from the provided PDFs. Please ensure the files are valid manifests and try again.");
@@ -119,53 +123,91 @@ const App: React.FC = () => {
           return null;
       }
 
-      // We only need the first page for the summary
-      const page = await pdf.getPage(1);
-      const viewport = page.getViewport({ scale: 1.5 });
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
-      await page.render({ canvasContext: context!, viewport: viewport }).promise;
-      const dataUrl = canvas.toDataURL("image/png");
-      const imagePart = { inlineData: { data: dataUrl.split(",")[1], mimeType: "image/png" } };
-      
-      const schema = {
-        type: Type.OBJECT,
-        properties: {
-          "TANGGAL": { type: Type.STRING, description: "Tanggal keberangkatan, format 'DD MMMM YYYY'" },
-          "NOMOR_VOYAGE": { type: Type.STRING, description: "Nomor voyage atau nama panggilan kapal" },
-          "PELABUHAN_MUAT": { type: Type.STRING, description: "Pelabuhan asal atau pelabuhan muat" },
-          "PELABUHAN_BONGKAR": { type: Type.STRING, description: "Pelabuhan tujuan atau pelabuhan bongkar" },
-          "JUMLAH_PENUMPANG": { type: Type.INTEGER, description: "Total jumlah penumpang dalam manifest. Hitung jumlah baris penumpang dalam tabel." },
-        },
-      };
+      let totalPassengers = 0;
+      let voyageInfo: any = {};
 
-      const prompt = `
-        Analisis gambar manifest penumpang ini. Ekstrak informasi ringkasan berikut dan HITUNG total jumlah baris penumpang dalam tabel.
-        - Tanggal: Tanggal keberangkatan.
-        - Nomor Voyage: Nomor voyage atau nama panggilan kapal.
-        - Pelabuhan Muat: Pelabuhan asal.
-        - Pelabuhan Bongkar: Pelabuhan tujuan.
-        - Jumlah Penumpang: Hitung total penumpang dari tabel.
-
-        Kembalikan hasilnya sebagai SATU objek JSON tunggal.
-      `;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [ { parts: [ { text: prompt }, imagePart ] } ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: schema,
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (!context) {
+          throw new Error("Could not get canvas context");
         }
-      });
-      
-      return JSON.parse(response.text);
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+        const dataUrl = canvas.toDataURL("image/png");
+        const imagePart = { inlineData: { data: dataUrl.split(",")[1], mimeType: "image/png" } };
+
+        if (i === 1) { // First page: get header info + passenger count
+          const schema = {
+            type: Type.OBJECT,
+            properties: {
+              "TANGGAL": { type: Type.STRING, description: "Tanggal keberangkatan, format 'DD MMMM YYYY'" },
+              "NOMOR_VOYAGE": { type: Type.STRING, description: "Nomor voyage atau nama panggilan kapal. Seringkali disebut 'NAMA KAPAL / NAMA PANGGILAN'" },
+              "PELABUHAN_MUAT": { type: Type.STRING, description: "Pelabuhan asal atau pelabuhan muat" },
+              "PELABUHAN_BONGKAR": { type: Type.STRING, description: "Pelabuhan tujuan atau pelabuhan bongkar" },
+              "JUMLAH_PENUMPANG": { type: Type.INTEGER, description: "Total jumlah baris penumpang yang valid dalam tabel HANYA DI HALAMAN INI. Hitung baris yang berisi data penumpang." },
+            },
+            required: ["TANGGAL", "NOMOR_VOYAGE", "PELABUHAN_MUAT", "PELABUHAN_BONGKAR", "JUMLAH_PENUMPANG"]
+          };
+          const prompt = `
+            Analisis gambar halaman pertama dari manifest penumpang ini.
+            1. Ekstrak informasi header berikut: Tanggal, Nomor Voyage (dari "NAMA KAPAL / NAMA PANGGILAN"), Pelabuhan Muat (dari "Pelabuhan Asal"), dan Pelabuhan Bongkar (dari "Pelabuhan Tujuan").
+            2. HITUNG secara akurat jumlah baris penumpang dalam tabel HANYA PADA HALAMAN INI. Abaikan baris header tabel.
+            
+            Kembalikan hasilnya sebagai SATU objek JSON tunggal yang sesuai dengan skema yang diberikan.
+          `;
+           const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: [ { parts: [ { text: prompt }, imagePart ] } ],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: schema,
+            }
+          });
+
+          const page1Data = JSON.parse(response.text);
+          voyageInfo = {
+             TANGGAL: page1Data.TANGGAL,
+             NOMOR_VOYAGE: page1Data.NOMOR_VOYAGE,
+             PELABUHAN_MUAT: page1Data.PELABUHAN_MUAT,
+             PELABUHAN_BONGKAR: page1Data.PELABUHAN_BONGKAR,
+          };
+          totalPassengers += page1Data.JUMLAH_PENUMPANG || 0;
+        } else { // Subsequent pages: just count passengers
+          const schema = {
+            type: Type.OBJECT,
+            properties: {
+               "JUMLAH_PENUMPANG": { type: Type.INTEGER, description: "Total jumlah baris penumpang yang valid dalam tabel HANYA DI HALAMAN INI. Hitung baris yang berisi data penumpang. Jangan sertakan header." },
+            },
+            required: ["JUMLAH_PENUMPANG"]
+          };
+           const prompt = `
+            Ini adalah halaman lanjutan dari manifest penumpang.
+            HITUNG secara akurat jumlah baris penumpang dalam tabel HANYA PADA HALAMAN INI. Abaikan baris header tabel.
+            
+            Kembalikan hasilnya sebagai SATU objek JSON tunggal yang hanya berisi jumlah penumpang di halaman ini.
+          `;
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: [ { parts: [ { text: prompt }, imagePart ] } ],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: schema,
+            }
+          });
+          
+          const pageNData = JSON.parse(response.text);
+          totalPassengers += pageNData.JUMLAH_PENUMPANG || 0;
+        }
+      }
+
+      return { ...voyageInfo, JUMLAH_PENUMPANG: totalPassengers };
 
     } catch (err) {
       console.error(`Failed to process ${file.name}:`, err);
-      // Return null for this file, so Promise.all doesn't fail for the whole batch
       return null;
     }
   };
