@@ -144,7 +144,7 @@ const App: React.FC = () => {
       const finalData = await standardizeAndMerge(allExtractedRows, ai, (msg) => setProgressMessage(`3/4: ${msg}`), updateEtr);
 
       if(finalData.length === 0) {
-        setErrorMessage("Could not standardize the extracted voyage data.");
+        setErrorMessage("Could not standardize the extracted table data. The model may have failed to group and summarize the voyage logs.");
         setStatus("error");
         return;
       }
@@ -225,16 +225,17 @@ const App: React.FC = () => {
                             return { inlineData: { data: dataUrl.split(",")[1], mimeType: "image/jpeg" } };
                         }));
                         
-                        const prompt = `Analyze these PDF pages and extract all tabular data into a single JSON array of objects. Each object represents a row.
+                        const prompt = `Analisis halaman-halaman PDF ini dan ekstrak semua data tabel ke dalam satu array JSON tunggal yang berisi objek-objek. Setiap objek mewakili satu baris.
 
-Key Instructions:
-1.  Identify all distinct column headers in any tables found.
-2.  For each data row, create a JSON object.
-3.  Every JSON object must have a key for every column header identified.
-4.  If a cell is empty for a row, use a 'null' value for its key. Do not omit the key.
-5.  If you find lists of passengers associated with a voyage, extract each passenger as a separate row but ensure voyage information (like voyage number, dates, ports) is copied to each passenger row.
+Instruksi Utama:
+1.  Identifikasi semua header kolom yang berbeda di setiap tabel yang ditemukan.
+2.  Untuk setiap baris data, buat sebuah objek JSON.
+3.  Setiap objek JSON harus memiliki kunci untuk setiap header kolom yang diidentifikasi.
+4.  Jika sebuah sel kosong untuk suatu baris, gunakan nilai 'null' untuk kuncinya. Jangan menghilangkan kunci tersebut.
+5.  Jika Anda menemukan daftar penumpang yang terkait dengan suatu pelayaran, ekstrak setiap penumpang sebagai baris terpisah tetapi pastikan informasi pelayaran (seperti nomor voyage, tanggal, pelabuhan) disalin ke setiap baris penumpang.
+6.  Tujuan akhirnya adalah untuk mengagregasi data ini, jadi sangat penting untuk menangkap semua detail dari setiap baris.
 
-If no tables are found, return an empty JSON array.`;
+Jika tidak ada tabel yang ditemukan, kembalikan array JSON kosong.`;
                         
                         const response = await ai.models.generateContent({
                           model: 'gemini-2.5-flash',
@@ -309,22 +310,22 @@ If no tables are found, return an empty JSON array.`;
 
       const transformationPromises = chunks.map(chunk => {
         const transformPrompt = `
-You are a data aggregation and transformation engine. Your task is to process raw data extracted from voyage log PDFs and summarize it into one record per voyage.
+Anda adalah mesin agregasi dan transformasi data. Tugas Anda adalah memproses data mentah yang diekstrak dari PDF log pelayaran dan merangkumnya menjadi satu catatan per pelayaran.
 
-**Master Schema (your final output for EACH unique voyage):**
+**Skema Utama (output akhir Anda untuk SETIAP pelayaran unik):**
 ${JSON.stringify(standardizedHeaders)}
 
-**CRITICAL INSTRUCTIONS:**
-1.  The raw data chunk below contains rows that might represent individual passengers or parts of a voyage log.
-2.  Your primary goal is to **group all rows by a unique voyage identifier** (like 'nomor voyage', 'voyage no', etc.).
-3.  For each unique voyage, you must create **a single summary JSON object**.
-4.  **Calculate the 'JUMLAH_PENUMPANG'**: Count the number of unique passengers or rows associated with each voyage to get the total passenger count.
-5.  **Extract Voyage Details**: From the rows for a given voyage, extract the 'TANGGAL', 'NOMOR_VOYAGE', 'PELABUHAN_MUAT', 'PELABUHAN_BONGKAR', and 'LAMA_PELAYARAN'. These values should be consistent for a single voyage.
-6.  Map the extracted and calculated data to the Master Schema. Ensure every object in your response array contains all keys from the schema.
-7.  If a value cannot be found or calculated, use a reasonable default like 'N/A' for strings or 0 for numbers.
-8.  Your output must ONLY be a JSON array of these summary objects. Do not include any other text.
+**INSTRUKSI PENTING:**
+1.  Potongan data mentah di bawah ini berisi baris-baris yang mungkin merupakan penumpang perorangan atau bagian dari log pelayaran.
+2.  Tujuan utama Anda adalah **mengelompokkan semua baris berdasarkan pengenal pelayaran yang unik** (seperti 'nomor voyage', 'voyage no', 'no. pelayaran', dll.).
+3.  Untuk setiap pelayaran unik, Anda harus membuat **satu objek JSON ringkasan tunggal**.
+4.  **Hitung 'JUMLAH_PENUMPANG'**: Hitung jumlah penumpang unik atau baris yang terkait dengan setiap pelayaran untuk mendapatkan jumlah total penumpang. Jika setiap baris adalah satu penumpang, cukup hitung baris untuk pelayaran tersebut.
+5.  **Ekstrak Detail Pelayaran**: Dari baris-baris untuk pelayaran tertentu, ekstrak 'TANGGAL', 'NOMOR_VOYAGE', 'PELABUHAN_MUAT', 'PELABUHAN_BONGKAR', dan 'LAMA_PELAYARAN'. Nilai-nilai ini harus konsisten untuk satu pelayaran.
+6.  Petakan data yang diekstrak dan dihitung ke Skema Utama. Pastikan setiap objek dalam array respons Anda berisi semua kunci dari skema.
+7.  Jika sebuah nilai tidak dapat ditemukan atau dihitung, gunakan nilai default yang wajar seperti 'N/A' untuk string atau 0 untuk angka.
+8.  Output Anda HARUS HANYA berupa array JSON dari objek-objek ringkasan ini. Jangan sertakan teks lain.
 
-**Raw Data Chunk to Process:**
+**Potongan Data Mentah untuk Diproses:**
 ${JSON.stringify(chunk)}
 `;
 
