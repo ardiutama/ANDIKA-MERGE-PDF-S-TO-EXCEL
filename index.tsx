@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -8,6 +8,7 @@ declare var XLSX: any;
 declare var pdfjsLib: any;
 
 const App: React.FC = () => {
+  const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<string>("idle"); // idle, processing, success, error
   const [progressMessage, setProgressMessage] = useState<string>("");
@@ -15,6 +16,15 @@ const App: React.FC = () => {
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Check for API Key on initial load
+    if (process.env.API_KEY) {
+      setIsConfigured(true);
+    } else {
+      setIsConfigured(false);
+    }
+  }, []);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
@@ -49,9 +59,9 @@ const App: React.FC = () => {
       return;
     }
 
+    // The initial check is now handled on app load, but we keep this as a safeguard.
     if (!process.env.API_KEY) {
-      setErrorMessage("Configuration Error: The API_KEY is missing. Please ensure it is set up correctly in your environment's secrets. For security, the API key should not be entered directly into the application.");
-      setStatus("error");
+      setIsConfigured(false);
       return;
     }
 
@@ -115,9 +125,9 @@ const App: React.FC = () => {
       console.error("Processing error:", error);
       let detailedErrorMessage = "An unexpected error occurred. Please check the console for details.";
       if (error instanceof Error) {
-          // Intercept the specific API key error to provide a more helpful message
           if (error.message.includes("API Key")) {
-              detailedErrorMessage = "Configuration Error: The API Key is invalid or missing. This app is designed to securely use an API key from a pre-configured environment. Please ensure it is set up correctly by the administrator.";
+              setIsConfigured(false); // Trigger the config screen if API key fails
+              return;
           } else {
             detailedErrorMessage = error.message;
           }
@@ -225,8 +235,7 @@ const App: React.FC = () => {
     }
   };
 
-
-  const renderContent = () => {
+  const renderAppContent = () => {
     switch(status) {
       case 'processing':
         return (
@@ -302,6 +311,47 @@ const App: React.FC = () => {
         );
     }
   };
+  
+  const render = () => {
+    if (isConfigured === null) {
+      return (
+        <div className="flex items-center justify-center h-full">
+            <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-sky-400"></div>
+        </div>
+      );
+    }
+    
+    if (!isConfigured) {
+      return (
+        <div className="text-center p-8 bg-amber-900/20 border border-amber-500 rounded-lg">
+          <svg xmlns="http://www.w3.org/2000/svg" className="mx-auto h-12 w-12 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <h2 className="text-2xl font-bold text-amber-300 mt-4 mb-2">Konfigurasi Diperlukan</h2>
+          <p className="text-slate-300">
+            Aplikasi ini memerlukan kunci API Google AI untuk berfungsi. Demi keamanan, kunci ini harus dikonfigurasi di <strong className="font-bold text-white">environment secrets</strong> platform ini.
+          </p>
+          <p className="mt-4 text-slate-400 text-sm">
+             Silakan buka pengaturan proyek Anda dan tambahkan secret baru dengan nama <code className="bg-slate-900/50 px-1 py-0.5 rounded text-sky-300">API_KEY</code> dan value-nya adalah kunci API Anda.
+          </p>
+        </div>
+      )
+    }
+
+    return (
+       <main className="bg-slate-800/50 p-8 rounded-xl shadow-2xl backdrop-blur-sm border border-slate-700">
+          <input
+            type="file"
+            multiple
+            accept=".pdf"
+            onChange={handleFileChange}
+            ref={fileInputRef}
+            className="hidden"
+          />
+          {renderAppContent()}
+        </main>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-slate-900 text-white font-sans">
@@ -314,18 +364,7 @@ const App: React.FC = () => {
             Extract voyage logs from multiple PDFs and merge them into a single Excel file.
           </p>
         </header>
-
-        <main className="bg-slate-800/50 p-8 rounded-xl shadow-2xl backdrop-blur-sm border border-slate-700">
-          <input
-            type="file"
-            multiple
-            accept=".pdf"
-            onChange={handleFileChange}
-            ref={fileInputRef}
-            className="hidden"
-          />
-          {renderContent()}
-        </main>
+        {render()}
       </div>
     </div>
   );
