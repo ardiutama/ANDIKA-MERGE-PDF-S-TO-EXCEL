@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -114,8 +113,16 @@ const App: React.FC = () => {
       setStatus("success");
     } catch (error) {
       console.error("Processing error:", error);
-      const message = error instanceof Error ? error.message : "An unknown error occurred during processing.";
-      setErrorMessage(message);
+      let detailedErrorMessage = "An unexpected error occurred. Please check the console for details.";
+      if (error instanceof Error) {
+          // Intercept the specific API key error to provide a more helpful message
+          if (error.message.includes("API Key")) {
+              detailedErrorMessage = "Configuration Error: The API Key is invalid or missing. This app is designed to securely use an API key from a pre-configured environment. Please ensure it is set up correctly by the administrator.";
+          } else {
+            detailedErrorMessage = error.message;
+          }
+      }
+      setErrorMessage(detailedErrorMessage);
       setStatus("error");
     }
   }, [files]);
