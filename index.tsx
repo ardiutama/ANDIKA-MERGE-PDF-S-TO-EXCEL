@@ -8,7 +8,6 @@ declare var XLSX: any;
 declare var pdfjsLib: any;
 
 const PDF_PAGE_CHUNK_SIZE = 5; // Process 5 pages at a time in parallel
-const DATA_CHUNK_SIZE = 100; // Standardize 100 rows at a time in parallel
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
@@ -158,7 +157,7 @@ const App: React.FC = () => {
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      setProgressMessage("1/5: Analyzing workload...");
+      setProgressMessage("1/4: Analyzing workload...");
       const pageCounts = await Promise.all(
         files.map(async (file) => {
           const typedarray = new Uint8Array(await file.arrayBuffer());
@@ -166,37 +165,25 @@ const App: React.FC = () => {
           return pdf.numPages;
         })
       );
-      const totalExtractionChunks = pageCounts.reduce((acc, count) => acc + Math.ceil(count / PDF_PAGE_CHUNK_SIZE), 0);
-      totalChunksRef.current = totalExtractionChunks * 2; // Rough guess for extraction + standardization
+      const totalChunks = pageCounts.reduce((acc, count) => acc + Math.ceil(count / PDF_PAGE_CHUNK_SIZE), 0);
+      totalChunksRef.current = totalChunks;
       startTimeRef.current = Date.now();
 
-      setProgressMessage(`2/5: Extracting data from ${files.length} PDFs...`);
-      const extractionPromises = files.map(file => extractTablesFromPdf(file, ai, updateEtr));
+      setProgressMessage(`2/4: Extracting & Standardizing data from ${files.length} PDFs...`);
+      const extractionPromises = files.map(file => extractAndStandardizeTablesFromPdf(file, ai, updateEtr));
       const extractionResults = await Promise.all(extractionPromises);
-      let allExtractedRows: any[] = extractionResults.flat();
+      const standardizedData: any[] = extractionResults.flat();
 
-      if (allExtractedRows.length === 0) {
-        setErrorMessage("No data could be extracted from the provided PDFs.");
+      if (standardizedData.length === 0) {
+        setErrorMessage("No structured data could be extracted from the provided PDFs. Please check the files and try again.");
         setStatus("error");
         return;
       }
-      
-      const actualStandardizationChunks = Math.ceil(allExtractedRows.length / DATA_CHUNK_SIZE);
-      totalChunksRef.current = totalExtractionChunks + actualStandardizationChunks;
 
-      setProgressMessage(`3/5: Standardizing ${allExtractedRows.length} rows...`);
-      const standardizedData = await standardizeAllRows(allExtractedRows, ai, updateEtr);
-      
-      if (standardizedData.length === 0) {
-          setErrorMessage("Could not standardize the extracted table data. The model may have failed to understand the data structure.");
-          setStatus("error");
-          return;
-      }
-
-      setProgressMessage(`4/5: Aggregating voyage logs...`);
+      setProgressMessage(`3/4: Aggregating ${standardizedData.length} rows...`);
       const finalData = aggregateData(standardizedData);
 
-      setProgressMessage("5/5: Generating Excel file...");
+      setProgressMessage("4/4: Generating Excel file...");
       setEtr("");
       
       const desiredHeadersInOrder = [
@@ -238,7 +225,7 @@ const App: React.FC = () => {
     }
   }, [files, apiKey, updateEtr]);
 
-  const extractTablesFromPdf = async (file: File, ai: GoogleGenAI, onChunkComplete: () => void): Promise<any[]> => {
+  const extractAndStandardizeTablesFromPdf = async (file: File, ai: GoogleGenAI, onChunkComplete: () => void): Promise<any[]> => {
     const fileReader = new FileReader();
     return new Promise((resolve, reject) => {
         fileReader.onload = async (event) => {
@@ -251,6 +238,38 @@ const App: React.FC = () => {
                     resolve([]);
                     return;
                 }
+                
+                const masterSchema = {
+                    "TANGGAL": { type: Type.STRING },
+                    "NOMOR_VOYAGE": { type: Type.STRING },
+                    "PELABUHAN_MUAT": { type: Type.STRING },
+                    "PELABUHAN_BONGKAR": { type: Type.STRING },
+                    "LAMA_PELAYARAN": { type: Type.STRING },
+                    "NAMA_PENUMPANG": { type: Type.STRING },
+                    "JUMLAH_PENUMPANG": { type: Type.STRING },
+                };
+                
+                const prompt = `
+Anda adalah ahli ekstraksi data dari gambar PDF. Tugas Anda adalah menganalisis gambar-gambar ini, menemukan semua data tabular, dan mengubahnya menjadi satu array JSON terstruktur.
+
+Skema Target JSON (Setiap objek dalam array HARUS memiliki kunci-kunci ini):
+- TANGGAL
+- NOMOR_VOYAGE
+- PELABUHAN_MUAT
+- PELABUHAN_BONGKAR
+- LAMA_PELAYARAN
+- NAMA_PENUMPANG
+- JUMLAH_PENUMPANG
+
+Instruksi Penting:
+1.  **Ekstrak SEMUA Baris:** Identifikasi semua tabel dan ekstrak setiap baris.
+2.  **Petakan ke Skema:** Untuk setiap baris yang diekstrak, buat objek JSON yang sesuai dengan Skema Target di atas. Lakukan pemetaan kolom terbaik yang Anda bisa (misalnya, 'No. Pelayaran' -> 'NOMOR_VOYAGE', 'Asal' -> 'PELABUHAN_MUAT', 'Tujuan' -> 'PELABUHAN_BONGKAR', 'Nama' -> 'NAMA_PENUMPANG', 'Jumlah' -> 'JUMLAH_PENUMPANG').
+3.  **Isi Data:**
+    - Jika baris tersebut adalah untuk satu penumpang, isi 'NAMA_PENUMPANG' dan biarkan 'JUMLAH_PENUMPANG' null.
+    - Jika baris tersebut adalah ringkasan perjalanan, isi 'JUMLAH_PENUMPANG' dari kolom jumlah dan biarkan 'NAMA_PENUMPANG' null.
+4.  **Nilai Kosong:** Jika suatu nilai untuk kunci Skema Target tidak dapat ditemukan di baris, gunakan nilai 'N/A' atau null.
+5.  **Output:** Kembalikan HANYA array JSON tunggal yang berisi semua objek yang telah diekstrak dan distandarisasi. Jika tidak ada tabel yang ditemukan, kembalikan array JSON kosong.
+`;
 
                 const pageChunks: number[][] = [];
                 for (let p = 0; p < totalPages; p += PDF_PAGE_CHUNK_SIZE) {
@@ -271,20 +290,19 @@ const App: React.FC = () => {
                             return { inlineData: { data: dataUrl.split(",")[1], mimeType: "image/jpeg" } };
                         }));
                         
-                        const prompt = `Analisis gambar-gambar halaman PDF ini dan ekstrak semua data tabular ke dalam satu array JSON. Setiap objek dalam array harus mewakili satu baris dari tabel.
-
-Instruksi:
-1.  Identifikasi semua tabel yang ada.
-2.  Ekstrak setiap baris dari setiap tabel.
-3.  Jika sebuah tabel berisi daftar penumpang individu, ekstrak setiap penumpang sebagai baris terpisah dalam array JSON.
-4.  Jika sebuah tabel berisi baris ringkasan (misalnya, satu baris untuk satu perjalanan dengan kolom 'Jumlah Penumpang'), ekstrak baris ringkasan tersebut apa adanya.
-5.  Gunakan header kolom dari PDF sebagai kunci dalam objek JSON.
-6.  Jika tidak ada tabel yang ditemukan, kembalikan array JSON kosong.`;
-                        
                         const response = await ai.models.generateContent({
                           model: 'gemini-2.5-flash',
                           contents: [ { parts: [ { text: prompt }, ...imageParts ] } ],
-                          config: { responseMimeType: "application/json" }
+                          config: { 
+                              responseMimeType: "application/json",
+                              responseSchema: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: masterSchema,
+                                }
+                              }
+                          }
                         });
 
                         const tables = JSON.parse(response.text);
@@ -309,85 +327,6 @@ Instruksi:
         fileReader.readAsArrayBuffer(file);
     });
   };
-  
-const standardizeAllRows = async (allRows: any[], ai: GoogleGenAI, onChunkComplete: () => void): Promise<any[]> => {
-    if (allRows.length === 0) return [];
-
-    const chunks = [];
-    for (let i = 0; i < allRows.length; i += DATA_CHUNK_SIZE) {
-        chunks.push(allRows.slice(i, i + DATA_CHUNK_SIZE));
-    }
-
-    const masterSchema = {
-        "TANGGAL": { type: Type.STRING },
-        "NOMOR_VOYAGE": { type: Type.STRING },
-        "PELABUHAN_MUAT": { type: Type.STRING },
-        "PELABUHAN_BONGKAR": { type: Type.STRING },
-        "LAMA_PELAYARAN": { type: Type.STRING },
-        "NAMA_PENUMPANG": { type: Type.STRING }, // To capture individual passenger names if present
-        "JUMLAH_PENUMPANG": { type: Type.STRING }, // To capture summary counts if present
-    };
-
-    const config = {
-        responseMimeType: "application/json",
-        responseSchema: {
-            type: Type.ARRAY,
-            items: {
-                type: Type.OBJECT,
-                properties: masterSchema,
-            }
-        },
-        thinkingConfig: { thinkingBudget: 0 }
-    };
-
-    const standardizationPromises = chunks.map(chunk => {
-        const prompt = `
-Anda adalah asisten pemetaan data. Tugas Anda adalah mengubah setiap objek JSON dalam array input agar sesuai dengan skema target.
-PENTING: JANGAN MENGAGREGASI, MENGHITUNG, ATAU MERINGKAS DATA. Ubah setiap objek satu per satu. Jumlah objek dalam output harus sama dengan jumlah objek dalam input.
-
-Skema Target (Kunci yang harus ada di setiap objek output):
-${JSON.stringify(Object.keys(masterSchema))}
-
-Instruksi:
-1.  Untuk setiap objek dalam data mentah, buat objek baru yang mengikuti Skema Target.
-2.  Petakan nilai dari data mentah ke kunci yang sesuai di Skema Target. Gunakan logika Anda untuk menemukan pemetaan terbaik.
-    - 'No. Pelayaran', 'voyage no' -> 'NOMOR_VOYAGE'.
-    - 'Port of Loading', 'Asal' -> 'PELABUHAN_MUAT'.
-    - 'Port of Discharge', 'Tujuan' -> 'PELABUHAN_BONGKAR'.
-    - 'Durasi', 'Lama' -> 'LAMA_PELAYARAN'.
-    - 'Nama', 'Passenger Name' -> 'NAMA_PENUMPANG'.
-    - 'Jumlah Orang', 'Penumpang', 'Total Penumpang' -> 'JUMLAH_PENUMPANG'.
-3.  Jika suatu nilai untuk kunci Skema Target tidak dapat ditemukan di objek mentah, gunakan nilai 'null'.
-4.  Pastikan output Anda HANYA berupa array JSON dari objek-objek yang telah diubah.
-
-Data Mentah untuk Diproses:
-${JSON.stringify(chunk)}
-`;
-        const promise = ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt, config });
-        promise.finally(() => onChunkComplete());
-        return promise;
-    });
-
-    const settledResults = await Promise.allSettled(standardizationPromises);
-    
-    let finalStandardizedData: any[] = [];
-    settledResults.forEach(result => {
-        if (result.status === 'fulfilled') {
-            try {
-                const standardizedChunk = JSON.parse(result.value.text);
-                if (Array.isArray(standardizedChunk)) {
-                    finalStandardizedData.push(...standardizedChunk);
-                }
-            } catch (e) {
-                console.warn("Failed to parse a standardized chunk:", e);
-            }
-        } else {
-            console.error("A standardization chunk failed:", result.reason);
-        }
-    });
-
-    return finalStandardizedData;
-};
 
   const renderContent = () => {
     switch(status) {
