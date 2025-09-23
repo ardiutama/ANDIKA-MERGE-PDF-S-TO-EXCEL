@@ -50,6 +50,12 @@ const App: React.FC = () => {
       return;
     }
 
+    if (!process.env.API_KEY) {
+      setErrorMessage("Configuration Error: The API_KEY is missing. Please ensure it is set up correctly in your environment's secrets. For security, the API key should not be entered directly into the application.");
+      setStatus("error");
+      return;
+    }
+
     setStatus("processing");
     setErrorMessage("");
     setDownloadLink(null);
@@ -108,7 +114,7 @@ const App: React.FC = () => {
       setStatus("success");
     } catch (error) {
       console.error("Processing error:", error);
-      const message = error instanceof Error ? error.message : "An unknown error occurred. Check if your API key is valid and has access to the Gemini API.";
+      const message = error instanceof Error ? error.message : "An unknown error occurred during processing.";
       setErrorMessage(message);
       setStatus("error");
     }
