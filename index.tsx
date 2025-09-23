@@ -9,7 +9,6 @@ declare var pdfjsLib: any;
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
-  const [apiKey, setApiKey] = useState<string>("");
   const [status, setStatus] = useState<string>("idle"); // idle, processing, success, error
   const [progressMessage, setProgressMessage] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string>("");
@@ -45,10 +44,6 @@ const App: React.FC = () => {
   };
 
   const processFiles = useCallback(async () => {
-    if (!apiKey) {
-      setErrorMessage("Please enter your Google GenAI API key.");
-      return;
-    }
     if (files.length === 0) {
       setErrorMessage("Please select at least one PDF file.");
       return;
@@ -59,7 +54,7 @@ const App: React.FC = () => {
     setDownloadLink(null);
     
     try {
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       setProgressMessage(`1/3: Analyzing ${files.length} files...`);
       
@@ -101,7 +96,7 @@ const App: React.FC = () => {
       XLSX.utils.book_append_sheet(workbook, worksheet, "Compiled Voyage Logs");
       
       const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-      const blob = new Blob([wbout], { type: 'application/octet-stream' });
+      const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
       const url = URL.createObjectURL(blob);
       setDownloadLink(url);
       
@@ -113,7 +108,7 @@ const App: React.FC = () => {
       setErrorMessage(message);
       setStatus("error");
     }
-  }, [files, apiKey]);
+  }, [files]);
 
   const extractSummaryFromPdf = async (file: File, ai: GoogleGenAI): Promise<any | null> => {
     try {
@@ -192,7 +187,7 @@ const App: React.FC = () => {
             <p className="mb-6 text-slate-300">Your compiled Excel file is ready for download.</p>
             <a
               href={downloadLink!}
-              download="compiled_voyage_logs.xlsx"
+              download="Laporan_Voyage_Gabungan.xlsx"
               className="inline-block bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105"
             >
               Download Excel File
@@ -213,21 +208,6 @@ const App: React.FC = () => {
       default: // idle
         return (
           <>
-            <div className="mb-6">
-              <label htmlFor="apiKey" className="block text-sm font-medium text-slate-300 mb-2">
-                Google GenAI API Key
-              </label>
-              <input
-                type="password"
-                id="apiKey"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Enter your API key"
-                className="w-full bg-slate-900/80 border border-slate-600 rounded-lg px-4 py-2 text-white placeholder-slate-500 focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition"
-                aria-label="Google GenAI API Key"
-              />
-            </div>
-
             <div 
               onClick={triggerFileSelect}
               className="flex justify-center items-center w-full px-6 py-10 border-2 border-dashed border-slate-600 hover:border-sky-400 rounded-lg cursor-pointer transition-colors"
@@ -258,7 +238,7 @@ const App: React.FC = () => {
             
             <button
               onClick={processFiles}
-              disabled={files.length === 0 || !apiKey}
+              disabled={files.length === 0}
               className="w-full mt-6 bg-sky-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-sky-700 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:text-slate-400 transition-colors"
             >
               Process {files.length > 0 ? files.length : ''} Files
