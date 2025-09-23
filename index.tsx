@@ -323,17 +323,63 @@ const App: React.FC = () => {
     
     if (!isConfigured) {
       return (
-        <div className="text-center p-8 bg-amber-900/20 border border-amber-500 rounded-lg">
-          <svg xmlns="http://www.w3.org/2000/svg" className="mx-auto h-12 w-12 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <div className="p-8 bg-slate-800/50 rounded-xl shadow-2xl backdrop-blur-sm border border-slate-700 text-left">
+          <div className="flex items-center mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-amber-400 mr-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <h2 className="text-2xl font-bold text-amber-300 mt-4 mb-2">Konfigurasi Diperlukan</h2>
-          <p className="text-slate-300">
-            Aplikasi ini memerlukan kunci API Google AI untuk berfungsi. Demi keamanan, kunci ini harus dikonfigurasi di <strong className="font-bold text-white">environment secrets</strong> platform ini.
-          </p>
-          <p className="mt-4 text-slate-400 text-sm">
-             Silakan buka pengaturan proyek Anda dan tambahkan secret baru dengan nama <code className="bg-slate-900/50 px-1 py-0.5 rounded text-sky-300">API_KEY</code> dan value-nya adalah kunci API Anda.
-          </p>
+            </svg>
+            <div>
+              <h2 className="text-2xl font-bold text-amber-300">Satu Langkah Terakhir: Konfigurasi Kunci API</h2>
+              <p className="text-slate-400">Untuk melindungi kunci API Anda, aplikasi ini membacanya dari pengaturan rahasia platform.</p>
+            </div>
+          </div>
+
+          <div className="space-y-4 mt-6">
+            <div className="flex items-start">
+              <div className="flex-shrink-0 w-8 h-8 bg-sky-500/20 text-sky-300 rounded-full flex items-center justify-center font-bold text-lg">1</div>
+              <div className="ml-4">
+                <h3 className="font-bold text-slate-100">Buka Pengaturan Proyek</h3>
+                <p className="text-slate-400">Di platform tempat aplikasi ini berjalan, cari menu "Settings" atau "Pengaturan".</p>
+              </div>
+            </div>
+            <div className="flex items-start">
+              <div className="flex-shrink-0 w-8 h-8 bg-sky-500/20 text-sky-300 rounded-full flex items-center justify-center font-bold text-lg">2</div>
+              <div className="ml-4">
+                <h3 className="font-bold text-slate-100">Temukan 'Secrets'</h3>
+                <p className="text-slate-400">Cari bagian bernama "Secrets" atau "Environment Variables".</p>
+              </div>
+            </div>
+            <div className="flex items-start">
+              <div className="flex-shrink-0 w-8 h-8 bg-sky-500/20 text-sky-300 rounded-full flex items-center justify-center font-bold text-lg">3</div>
+              <div className="ml-4">
+                <h3 className="font-bold text-slate-100">Buat Secret Baru</h3>
+                <div className="mt-2 p-3 bg-slate-900/50 rounded-md border border-slate-700 text-sm">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">Nama / Name:</span>
+                    <code className="px-2 py-1 rounded text-sky-300 bg-slate-700 font-mono">API_KEY</code>
+                  </div>
+                  <hr className="border-slate-700 my-2" />
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">Value / Nilai:</span>
+                    <span className="text-slate-500 italic">tempelkan kunci API Anda di sini</span>
+                  </div>
+                </div>
+                 <p className="text-xs text-slate-500 mt-2">Nama secret harus <strong className="text-slate-400">API_KEY</strong>, sama persis.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8 text-center">
+            <button 
+              onClick={() => window.location.reload()}
+              className="bg-sky-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-sky-700 transition-colors flex items-center justify-center mx-auto"
+            >
+               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 mr-2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0 0 11.667 0l3.181-3.183m-4.991-2.691L15.023 9.348a8.25 8.25 0 0 0-11.667 0L2.985 12.355" />
+              </svg>
+              Saya Sudah Selesai, Segarkan Halaman
+            </button>
+          </div>
         </div>
       )
     }
