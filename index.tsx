@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -8,8 +8,6 @@ declare var XLSX: any;
 declare var pdfjsLib: any;
 
 const App: React.FC = () => {
-  const [isConfigured, setIsConfigured] = useState<boolean | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState<string>("");
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<string>("idle"); // idle, processing, success, error
   const [progressMessage, setProgressMessage] = useState<string>("");
@@ -20,37 +18,25 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const getApiKey = (): string | null => {
-    return process.env.API_KEY || sessionStorage.getItem('GEMINI_API_KEY');
-  };
-
-  useEffect(() => {
-    // Check for API Key on initial load
-    if (getApiKey()) {
-      setIsConfigured(true);
-    } else {
-      setIsConfigured(false);
-    }
-  }, []);
-
-  const handleApiKeySubmit = (event: React.FormEvent) => {
-    event.preventDefault();
-    if (apiKeyInput.trim()) {
-      sessionStorage.setItem('GEMINI_API_KEY', apiKeyInput.trim());
-      setIsConfigured(true);
-      setApiKeyInput(""); // Clear the input from state after saving
-    }
-  };
-
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files) {
-      const selectedFiles = Array.from(event.target.files);
-      if (selectedFiles.length > 0) {
-        setFiles(selectedFiles);
+      const newFiles = Array.from(event.target.files);
+      if (newFiles.length > 0) {
+        setFiles(prevFiles => {
+          // Create a Set of existing file identifiers for quick lookup
+          // FIX: Add explicit type for 'f' to resolve TS error on 'f.name' and 'f.size'
+          const existingFileKeys = new Set(prevFiles.map((f: File) => `${f.name}-${f.size}`));
+          // Filter out new files that already exist in the list
+          const uniqueNewFiles = newFiles.filter((f: File) => !existingFileKeys.has(`${f.name}-${f.size}`));
+          // Combine the previous files with the unique new files
+          return [...prevFiles, ...uniqueNewFiles];
+        });
         setStatus('idle');
         setDownloadLink(null);
         setErrorMessage("");
       }
+       // Reset the input value to allow selecting the same file(s) again after clearing
+      event.target.value = '';
     }
   };
 
@@ -77,9 +63,11 @@ const App: React.FC = () => {
       return;
     }
 
-    const apiKey = getApiKey();
+    // REFACTOR: Use API_KEY from environment variables exclusively as per guidelines.
+    const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      setIsConfigured(false);
+      setErrorMessage("API_KEY environment variable not set.");
+      setStatus("error");
       return;
     }
 
@@ -171,10 +159,9 @@ const App: React.FC = () => {
       console.error("Processing error:", error);
       let detailedErrorMessage = "An unexpected error occurred. Please check the console for details.";
       if (error instanceof Error) {
+          // REFACTOR: Update error handling for API Key failure.
           if (error.message.includes("API Key")) {
-              sessionStorage.removeItem('GEMINI_API_KEY');
-              setIsConfigured(false); // Trigger the config screen if API key fails
-              return;
+            detailedErrorMessage = "An error occurred with the API Key. Please ensure it is valid.";
           } else {
             detailedErrorMessage = error.message;
           }
@@ -237,7 +224,7 @@ const App: React.FC = () => {
           `;
            const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: [ { parts: [ { text: prompt }, imagePart ] } ],
+            contents: { parts: [ { text: prompt }, imagePart ] },
             config: {
               responseMimeType: "application/json",
               responseSchema: schema,
@@ -269,7 +256,7 @@ const App: React.FC = () => {
           `;
           const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: [ { parts: [ { text: prompt }, imagePart ] } ],
+            contents: { parts: [ { text: prompt }, imagePart ] },
             config: {
               responseMimeType: "application/json",
               responseSchema: schema,
@@ -357,10 +344,19 @@ const App: React.FC = () => {
 
             {files.length > 0 && (
               <div className="mt-6">
-                <h3 className="font-semibold mb-2">Selected Files ({files.length}):</h3>
+                <div className="flex justify-between items-center mb-2">
+                    <h3 className="font-semibold">Selected Files ({files.length}):</h3>
+                    <button 
+                        onClick={resetState} 
+                        className="text-xs font-semibold text-sky-400 hover:text-sky-300 transition-colors"
+                        aria-label="Clear all selected files"
+                    >
+                        CLEAR ALL
+                    </button>
+                </div>
                 <ul className="max-h-32 overflow-y-auto bg-slate-800 p-2 rounded-md border border-slate-700">
                   {files.map((file, index) => (
-                    <li key={index} className="text-sm text-slate-300 truncate">{file.name}</li>
+                    <li key={`${file.name}-${file.size}-${index}`} className="text-sm text-slate-300 truncate">{file.name}</li>
                   ))}
                 </ul>
               </div>
@@ -386,62 +382,8 @@ const App: React.FC = () => {
     }
   };
   
+  // REFACTOR: Removed API Key configuration UI and logic to align with guidelines.
   const render = () => {
-    if (isConfigured === null) {
-      return (
-        <div className="flex items-center justify-center h-full">
-            <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-sky-400"></div>
-        </div>
-      );
-    }
-    
-    if (!isConfigured) {
-      return (
-        <div className="p-8 bg-slate-800/50 rounded-xl shadow-2xl backdrop-blur-sm border border-slate-700 text-left">
-          <div className="flex items-center mb-4">
-             <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-amber-400 mr-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <div>
-              <h2 className="text-2xl font-bold text-amber-300">Konfigurasi Kunci API Diperlukan</h2>
-              <p className="text-slate-400">Silakan masukkan kunci API Google AI Anda untuk melanjutkan.</p>
-            </div>
-          </div>
-
-          <form onSubmit={handleApiKeySubmit} className="mt-6 space-y-4">
-            <div>
-              <label htmlFor="api-key-input" className="block text-sm font-medium text-slate-300 mb-2">
-                Google AI API Key
-              </label>
-              <input
-                id="api-key-input"
-                type="password"
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-900 border border-slate-600 rounded-md text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                placeholder="Masukkan kunci API Anda di sini"
-                required
-              />
-            </div>
-            
-            <div className="p-3 bg-amber-900/20 text-amber-300 text-xs rounded-md border border-amber-800">
-              <strong>Catatan Keamanan:</strong> Kunci Anda hanya akan disimpan selama sesi browser ini dan akan hilang saat Anda menutup tab.
-            </div>
-            
-            <button
-              type="submit"
-              className="w-full bg-sky-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-sky-700 disabled:bg-slate-700 disabled:cursor-not-allowed disabled:text-slate-400 transition-colors"
-            >
-              Simpan dan Lanjutkan
-            </button>
-          </form>
-           <p className="text-xs text-slate-500 mt-4 text-center">
-             Untuk keamanan terbaik, disarankan untuk mengkonfigurasi kunci sebagai <code className="bg-slate-700 px-1 rounded">API_KEY</code> environment secret.
-           </p>
-        </div>
-      )
-    }
-
     return (
        <main className="bg-slate-800/50 p-8 rounded-xl shadow-2xl backdrop-blur-sm border border-slate-700">
           <input
