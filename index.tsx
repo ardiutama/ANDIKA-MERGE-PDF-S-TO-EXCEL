@@ -15,29 +15,48 @@ const App: React.FC = () => {
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
   const [failedFiles, setFailedFiles] = useState<string[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-      const newFiles = Array.from(event.target.files);
+  const addFilesToList = (fileList: FileList | null) => {
+    if (fileList) {
+      const newFiles = Array.from(fileList);
       if (newFiles.length > 0) {
         setFiles(prevFiles => {
-          // Create a Set of existing file identifiers for quick lookup
-          // FIX: Add explicit type for 'f' to resolve TS error on 'f.name' and 'f.size'
           const existingFileKeys = new Set(prevFiles.map((f: File) => `${f.name}-${f.size}`));
-          // Filter out new files that already exist in the list
           const uniqueNewFiles = newFiles.filter((f: File) => !existingFileKeys.has(`${f.name}-${f.size}`));
-          // Combine the previous files with the unique new files
           return [...prevFiles, ...uniqueNewFiles];
         });
         setStatus('idle');
         setDownloadLink(null);
         setErrorMessage("");
       }
-       // Reset the input value to allow selecting the same file(s) again after clearing
+    }
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    addFilesToList(event.target.files);
+    // Reset the input value to allow selecting the same file(s) again after clearing
+    if (event.target) {
       event.target.value = '';
     }
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    addFilesToList(event.dataTransfer.files);
   };
 
   const triggerFileSelect = () => {
@@ -63,7 +82,6 @@ const App: React.FC = () => {
       return;
     }
 
-    // REFACTOR: Use API_KEY from environment variables exclusively as per guidelines.
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
       setErrorMessage("API_KEY environment variable not set.");
@@ -159,7 +177,6 @@ const App: React.FC = () => {
       console.error("Processing error:", error);
       let detailedErrorMessage = "An unexpected error occurred. Please check the console for details.";
       if (error instanceof Error) {
-          // REFACTOR: Update error handling for API Key failure.
           if (error.message.includes("API Key")) {
             detailedErrorMessage = "An error occurred with the API Key. Please ensure it is valid.";
           } else {
@@ -329,7 +346,10 @@ const App: React.FC = () => {
           <>
             <div 
               onClick={triggerFileSelect}
-              className="flex justify-center items-center w-full px-6 py-10 border-2 border-dashed border-slate-600 hover:border-sky-400 rounded-lg cursor-pointer transition-colors"
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`flex justify-center items-center w-full px-6 py-10 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${isDragging ? 'border-sky-400 bg-sky-900/50' : 'border-slate-600 hover:border-sky-400'}`}
             >
               <div className="text-center">
                 <svg className="mx-auto h-12 w-12 text-slate-500" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
@@ -382,7 +402,6 @@ const App: React.FC = () => {
     }
   };
   
-  // REFACTOR: Removed API Key configuration UI and logic to align with guidelines.
   const render = () => {
     return (
        <main className="bg-slate-800/50 p-8 rounded-xl shadow-2xl backdrop-blur-sm border border-slate-700">
