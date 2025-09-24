@@ -15,6 +15,8 @@ const App: React.FC = () => {
   const [progressMessage, setProgressMessage] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [downloadLink, setDownloadLink] = useState<string | null>(null);
+  const [progress, setProgress] = useState<number>(0);
+  const [failedFiles, setFailedFiles] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -62,6 +64,8 @@ const App: React.FC = () => {
     setProgressMessage("");
     setErrorMessage("");
     setDownloadLink(null);
+    setProgress(0);
+    setFailedFiles([]);
     if(fileInputRef.current) {
         fileInputRef.current.value = "";
     }
@@ -82,27 +86,47 @@ const App: React.FC = () => {
     setStatus("processing");
     setErrorMessage("");
     setDownloadLink(null);
+    setProgress(0);
+    setFailedFiles([]);
     
     try {
       const ai = new GoogleGenAI({ apiKey });
       
-      setProgressMessage(`1/3: Analyzing ${files.length} PDF file(s)...`);
-      
-      const extractionPromises = files.map((file, index) => {
-          setProgressMessage(`2/3: Extracting summary from ${file.name} (${index + 1}/${files.length})...`);
-          return extractSummaryFromPdf(file, ai);
-      });
+      const allSummaries = [];
+      const localFailedFiles: string[] = [];
 
-      const summaries = await Promise.all(extractionPromises);
-      const validSummaries = summaries.filter(s => s !== null && s.JUMLAH_PENUMPANG > 0);
+      setProgressMessage(`Starting processing for ${files.length} files...`);
+
+      // Process files sequentially to avoid browser crashes and API rate limiting
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setProgressMessage(`Processing file ${i + 1}/${files.length}: ${file.name}`);
+        setProgress(((i + 1) / files.length) * 100);
+
+        const summary = await extractSummaryFromPdf(file, ai);
+        
+        if (summary) {
+          allSummaries.push(summary);
+        } else {
+          localFailedFiles.push(file.name);
+        }
+      }
+
+      setFailedFiles(localFailedFiles);
+
+      const validSummaries = allSummaries.filter(s => s.JUMLAH_PENUMPANG > 0);
 
       if (validSummaries.length === 0) {
-        setErrorMessage("Could not extract any voyage summaries from the provided PDFs. Please ensure the files are valid manifests and try again.");
+        let errorMsg = "Could not extract any voyage summaries from the provided PDFs. Please ensure the files are valid manifests and try again.";
+        if (localFailedFiles.length > 0) {
+          errorMsg = `None of the files could be processed successfully. Failed files: ${localFailedFiles.length}.`;
+        }
+        setErrorMessage(errorMsg);
         setStatus("error");
         return;
       }
 
-      setProgressMessage(`3/3: Generating Excel file...`);
+      setProgressMessage(`Generating Excel file...`);
       
       const desiredHeadersInOrder = [
         "NO",
@@ -137,7 +161,11 @@ const App: React.FC = () => {
       const url = URL.createObjectURL(blob);
       setDownloadLink(url);
       
-      setProgressMessage("Processing complete!");
+      let finalMessage = `Processing complete! ${validSummaries.length} files successfully processed.`;
+      if (localFailedFiles.length > 0) {
+          finalMessage = `Processing complete! ${validSummaries.length} succeeded, ${localFailedFiles.length} failed.`;
+      }
+      setProgressMessage(finalMessage);
       setStatus("success");
     } catch (error) {
       console.error("Processing error:", error);
@@ -265,16 +293,22 @@ const App: React.FC = () => {
     switch(status) {
       case 'processing':
         return (
-          <div className="text-center">
-            <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-sky-400 mx-auto"></div>
-            <p className="mt-4 text-lg text-slate-300">{progressMessage}</p>
+          <div className="text-center w-full">
+            <h3 className="text-xl font-semibold text-sky-300 mb-4">Processing Files...</h3>
+            <div className="w-full bg-slate-700 rounded-full h-4 mb-2 border border-slate-600">
+              <div 
+                className="bg-sky-500 h-full rounded-full transition-all duration-300 ease-in-out" 
+                style={{ width: `${progress}%` }}
+              ></div>
+            </div>
+             <p className="text-sm text-slate-300 truncate">{progressMessage}</p>
           </div>
         );
       case 'success':
         return (
           <div className="text-center p-8 bg-slate-800 rounded-lg">
-            <h2 className="text-2xl font-bold text-green-400 mb-4">Success!</h2>
-            <p className="mb-6 text-slate-300">Your compiled Excel file is ready for download.</p>
+            <h2 className="text-2xl font-bold text-green-400 mb-2">Success!</h2>
+            <p className="mb-6 text-slate-300">{progressMessage}</p>
             <a
               href={downloadLink!}
               download="Laporan_Voyage_Gabungan.xlsx"
@@ -282,7 +316,15 @@ const App: React.FC = () => {
             >
               Download Excel File
             </a>
-            <button onClick={resetState} className="mt-4 ml-4 text-sm text-sky-400 hover:text-sky-300">Start Over</button>
+            {failedFiles.length > 0 && (
+                <div className="mt-6 text-left text-sm text-amber-400 max-w-md mx-auto">
+                    <p className="font-semibold">The following {failedFiles.length} files could not be processed:</p>
+                    <ul className="list-disc list-inside max-h-32 overflow-y-auto bg-slate-900/50 p-2 rounded mt-1 border border-slate-700">
+                        {failedFiles.map(name => <li key={name} className="truncate">{name}</li>)}
+                    </ul>
+                </div>
+            )}
+            <button onClick={resetState} className="mt-6 text-sm text-sky-400 hover:text-sky-300">Start Over</button>
           </div>
         );
       case 'error':
@@ -315,8 +357,8 @@ const App: React.FC = () => {
 
             {files.length > 0 && (
               <div className="mt-6">
-                <h3 className="font-semibold mb-2">Selected Files:</h3>
-                <ul className="max-h-32 overflow-y-auto bg-slate-800 p-2 rounded-md">
+                <h3 className="font-semibold mb-2">Selected Files ({files.length}):</h3>
+                <ul className="max-h-32 overflow-y-auto bg-slate-800 p-2 rounded-md border border-slate-700">
                   {files.map((file, index) => (
                     <li key={index} className="text-sm text-slate-300 truncate">{file.name}</li>
                   ))}
@@ -324,6 +366,12 @@ const App: React.FC = () => {
               </div>
             )}
             
+            {files.length > 50 && (
+                <div className="mt-4 p-3 bg-amber-900/20 text-amber-300 text-xs rounded-md border border-amber-800">
+                    <strong>Warning:</strong> You have selected a large number of files. Processing may take a very long time. Please keep this browser tab open and connected to the internet.
+                </div>
+            )}
+
             {errorMessage && <p className="mt-4 text-sm text-red-400">{errorMessage}</p>}
             
             <button
