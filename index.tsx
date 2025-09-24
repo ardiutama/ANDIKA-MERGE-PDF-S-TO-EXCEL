@@ -107,21 +107,25 @@ const App: React.FC = () => {
       const desiredHeadersInOrder = [
         "NO",
         "TANGGAL",
+        "WAKTU",
         "NOMOR VOYAGE",
         "PELABUHAN MUAT",
         "PELABUHAN BONGKAR",
         "LAMA PELAYARAN",
-        "JUMLAH PENUMPANG"
+        "JUMLAH PENUMPANG G",
+        "KETERANGAN"
       ];
       
       const dataForSheet = validSummaries.map((summary, index) => ({
         "NO": index + 1,
-        "TANGGAL": summary.TANGGAL || 'N/A',
-        "NOMOR VOYAGE": summary.NOMOR_VOYAGE || 'N/A',
-        "PELABUHAN MUAT": summary.PELABUHAN_MUAT || 'N/A',
-        "PELABUHAN BONGKAR": summary.PELABUHAN_BONGKAR || 'N/A',
-        "LAMA PELAYARAN": 'N/A', // As per user's final output example
-        "JUMLAH PENUMPANG": summary.JUMLAH_PENUMPANG || 0,
+        "TANGGAL": summary.TANGGAL || '',
+        "WAKTU": summary.WAKTU || '',
+        "NOMOR VOYAGE": summary.NOMOR_VOYAGE || '',
+        "PELABUHAN MUAT": summary.PELABUHAN_MUAT || '',
+        "PELABUHAN BONGKAR": summary.PELABUHAN_BONGKAR || '',
+        "LAMA PELAYARAN": "",
+        "JUMLAH PENUMPANG G": summary.JUMLAH_PENUMPANG || 0,
+        "KETERANGAN": ""
       }));
 
       const workbook = XLSX.utils.book_new();
@@ -182,19 +186,25 @@ const App: React.FC = () => {
           const schema = {
             type: Type.OBJECT,
             properties: {
-              "TANGGAL": { type: Type.STRING, description: "Tanggal keberangkatan, format 'DD MMMM YYYY'" },
-              "NOMOR_VOYAGE": { type: Type.STRING, description: "Nomor voyage atau nama panggilan kapal. Seringkali disebut 'NAMA KAPAL / NAMA PANGGILAN'" },
-              "PELABUHAN_MUAT": { type: Type.STRING, description: "Pelabuhan asal atau pelabuhan muat" },
-              "PELABUHAN_BONGKAR": { type: Type.STRING, description: "Pelabuhan tujuan atau pelabuhan bongkar" },
-              "JUMLAH_PENUMPANG": { type: Type.INTEGER, description: "Total jumlah baris penumpang yang valid dalam tabel HANYA DI HALAMAN INI. Hitung baris yang berisi data penumpang." },
+              "TANGGAL": { type: Type.STRING, description: "Tanggal keberangkatan lengkap dengan nama hari. Contoh: 'Kamis, 18 Juli 2024'" },
+              "WAKTU": { type: Type.STRING, description: "Waktu keberangkatan dalam format HH:MM. Contoh: '08:00'" },
+              "NOMOR_VOYAGE": { type: Type.STRING, description: "Nama kapal dan/atau nama panggilan dari 'NAMA KAPAL / NAMA PANGGILAN'. Contoh: 'KM. SULTAN HASANUDDIN / YCG12'" },
+              "PELABUHAN_MUAT": { type: Type.STRING, description: "Pelabuhan asal atau pelabuhan muat dari 'Pelabuhan Asal'" },
+              "PELABUHAN_BONGKAR": { type: Type.STRING, description: "Pelabuhan tujuan atau pelabuhan bongkar dari 'Pelabuhan Tujuan'" },
+              "JUMLAH_PENUMPANG": { type: Type.INTEGER, description: "Total jumlah baris penumpang yang valid dalam tabel HANYA DI HALAMAN INI. Hitung baris yang berisi data penumpang, abaikan header tabel." },
             },
-            required: ["TANGGAL", "NOMOR_VOYAGE", "PELABUHAN_MUAT", "PELABUHAN_BONGKAR", "JUMLAH_PENUMPANG"]
+            required: ["TANGGAL", "WAKTU", "NOMOR_VOYAGE", "PELABUHAN_MUAT", "PELABUHAN_BONGKAR", "JUMLAH_PENUMPANG"]
           };
           const prompt = `
             Analisis gambar halaman pertama dari manifest penumpang ini.
-            1. Ekstrak informasi header berikut: Tanggal, Nomor Voyage (dari "NAMA KAPAL / NAMA PANGGILAN"), Pelabuhan Muat (dari "Pelabuhan Asal"), dan Pelabuhan Bongkar (dari "Pelabuhan Tujuan").
+            1. Ekstrak informasi header berikut:
+               - Tanggal: Tanggal lengkap termasuk nama hari dari 'Hari/Tanggal/Jam'.
+               - Waktu: Waktu keberangkatan dari 'Hari/Tanggal/Jam'.
+               - Nomor Voyage: Nama kapal/panggilan dari 'NAMA KAPAL / NAMA PANGGILAN'.
+               - Pelabuhan Muat: Dari 'Pelabuhan Asal'.
+               - Pelabuhan Bongkar: Dari 'Pelabuhan Tujuan'.
             2. HITUNG secara akurat jumlah baris penumpang dalam tabel HANYA PADA HALAMAN INI. Abaikan baris header tabel.
-            
+
             Kembalikan hasilnya sebagai SATU objek JSON tunggal yang sesuai dengan skema yang diberikan.
           `;
            const response = await ai.models.generateContent({
@@ -209,6 +219,7 @@ const App: React.FC = () => {
           const page1Data = JSON.parse(response.text);
           voyageInfo = {
              TANGGAL: page1Data.TANGGAL,
+             WAKTU: page1Data.WAKTU,
              NOMOR_VOYAGE: page1Data.NOMOR_VOYAGE,
              PELABUHAN_MUAT: page1Data.PELABUHAN_MUAT,
              PELABUHAN_BONGKAR: page1Data.PELABUHAN_BONGKAR,
